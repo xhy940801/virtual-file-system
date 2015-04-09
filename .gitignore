@@ -1,0 +1,7 @@
+/dep/*.d
+/obj/*.o
+/bin/*
+/lib/*
+*.test.*
+*.conf
+*.os
