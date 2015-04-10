@@ -10,6 +10,8 @@
 #include <thread>
 #include <mutex>
 #include <map>
+#include <list>
+#include <vector>
 
 #define ERR_FLOCKED 1000
 #define ERR_FLODER_NOTEPT 1001
@@ -20,6 +22,9 @@
 #define ERR_MEM_FULL 1006
 #define ERR_NME_CONFLICT 1007
 #define ERR_PATH_IS_NOT_FLODER 1008
+#define ERR_PATH_IS_NOT_FILE 1009
+#define ERR_PMS_DENY 1010
+#define ERR_EOF 1011
 
 #define OPTYPE_READ 0x01
 #define OPTYPE_WRITE 0x02
@@ -40,20 +45,25 @@ class XHYFileManager
 		}
 	};
 	static const size_t HANDLERSIZE = 4;
+public:
+	enum FPos { beg, cur, end };
 private:
+	int _cmfd, _csfd;
 	DiskDriver* driver;
 	const size_t chunkSize;
 	std::mutex mtx;
 	FSHeader header;
 	BufHandler bufHandlers[HANDLERSIZE];
 	std::map<std::thread::id, int> _errno;
-	std::map<int, FDMInfo> _fdmap;
-	std::map<std::thread::id, std::vector<FDSInfo> > _thmap;
+	std::map<int, FDMInfo> _fdmmap;
+	std::map<int, std::list<FDSInfo>::iterator> _fdsmap;
+	std::map<cpos_t, int> _cpmap;
+	std::map<std::thread::id, std::list<FDSInfo> > _thmap;
 private:
 	bool createFolder(cpos_t parent, const char* name, uidsize_t uid);
 	bool createFile(cpos_t parent, const char* name, uidsize_t uid);
 
-	cpos_t getFreeChunk(size_t expected, size_t& had);
+	cpos_t getFreeChunk(cksize_t expected, cksize_t& had);
 	void releaseChunk(cpos_t pos, size_t size);
 	void flush();
 
@@ -65,8 +75,7 @@ private:
 	template <typename CheckPmsS>
 	bool delItem(cpos_t cur, CheckPmsS pms);
 
-	template <typename CheckPms>
-	bool delNode(CKInfo* info, CheckPms pms);
+	bool delNode(CKInfo* info);
 
 	bool load(cpos_t pos, size_t hdlid);
 	Folder loadFolder(cpos_t pos, size_t hdlid);
@@ -79,8 +88,16 @@ private:
 
 	void releaseFd(FDSInfo& info);
 	void flushHandler(FDMInfo& info);
-public:
-	enum FPos { beg, cur, end };
+	void flushHandler(FDMInfo& info, time_t modified);
+
+	int getFreeMFd();
+	int getFreeSFd();
+	bool fillCKInfo(std::vector<CKInfo>& vec, CKInfo& info);
+
+	bool tryLock(SafeInfo& sfInfo, fdtype_t type);
+	bool isOwner(int fd);
+	bool appendFile(FDMInfo& mInfo, size_t len);
+	void _seek(FDMInfo& mInfo, FDSInfo& info, int offset, FPos pos);
 public:
 	XHYFileManager(DiskDriver* dvr);
 	~XHYFileManager();
@@ -103,11 +120,13 @@ public:
 	template <typename CheckPms>
 	int open(const char* path, fdtype_t type, CheckPms pms);
 
-	int read(int fd, void* buf, size_t len);
-	int write(int fd, void* buf, size_t len);
+	bool close(int fd);
 
-	int tell(int fd);
-	int seek(int fd, int offset, FPos pos);
+	int read(int fd, void* buf, size_t len);
+	int write(int fd, const void* buf, size_t len);
+
+	size_t tell(int fd);
+	size_t seek(int fd, int offset, FPos pos);
 };
 
 template <typename CheckPmsS>
@@ -139,7 +158,7 @@ bool XHYFileManager::delItem(cpos_t cur, CheckPmsS pms)
 			size_t ckLen = chpr.getCKLen();
 			CKInfo* cks = chpr.getCKInfo();
 			for(size_t i = 0; i < ckLen; ++i)
-				if(!delNode(&cks[i], pms))
+				if(!delNode(&cks[i]))
 					return false;
 		}
 	}
@@ -153,31 +172,6 @@ bool XHYFileManager::delItem(cpos_t cur, CheckPmsS pms)
 		}
 	}
 	releaseChunk(cur, 1);
-	return true;
-}
-
-template <typename CheckPms>
-bool XHYFileManager::delNode(CKInfo* info, CheckPms pms)
-{
-	if(info->pos != 0)
-	{
-		if(info->num < 0)
-		{
-			if(!driver->getChunk(info->pos, bufHandlers[3].buf, chunkSize))
-			{
-				setErrno(ERR_SYS_LOADFAIL);
-				return false;
-			}
-			ChunkHelper chpr(bufHandlers[3].buf, chunkSize);
-			size_t cklen = chpr.getAPCKLen();
-			CKInfo* ckInfo = chpr.getAPCKInfo();
-			for(size_t i = 0; i < cklen; ++i)
-				delNode(&ckInfo[i], pms);
-			releaseChunk(info->pos, 1);
-		}
-		else if(info->num > 0)
-			releaseChunk(info->pos, info->num);
-	}
 	return true;
 }
 
@@ -312,7 +306,94 @@ bool XHYFileManager::deleteItem(const char* path, CheckPmsP pmsp, CheckPmsS pmss
 template <typename CheckPms>
 int XHYFileManager::open(const char* path, fdtype_t type, CheckPms pms)
 {
-	
+	std::lock_guard<std::mutex> lck (mtx);
+	if((type & OPTYPE_READ) && !(type & OPTYPE_RAD_SHR_LOCK))
+		type |= OPTYPE_RAD_MTX_LOCK;
+	if((type & OPTYPE_WRITE) && !(type & OPTYPE_WTE_SHR_LOCK))
+		type |= OPTYPE_WTE_MTX_LOCK;
+	size_t len = strlen(path);
+	if(path[0] != '/')
+	{
+		setErrno(ERR_PATH_NOTEXT);
+		return 0;
+	}
+	if(len == 1)
+	{
+		setErrno(ERR_PATH_IS_NOT_FILE);
+		return 0;
+	}
+	cpos_t cur = loadPath(path, len);
+	auto it = _cpmap.find(cur);
+	int rsfd;
+	if(it == _cpmap.end())
+	{
+		IndexNode inode = loadINode(cur, 0);
+		if(inode.cur == 0)
+			return false;
+		if(checkType(0) != 0)
+		{
+			setErrno(ERR_PATH_IS_NOT_FILE);
+			return 0;
+		}
+		int err = pms(inode.sfInfo);
+		if(err != 0)
+		{
+			setErrno(err);
+			return 0;
+		}
+		FDMInfo info;
+		info.sfInfo = *inode.sfInfo;
+		info.hdpos = cur;
+		info.openCount = 1;
+		info.fileSize = inode.info->fileSize;
+
+		if(info.fileSize + sizeof(SafeInfo) + sizeof(INInfo) > chunkSize)
+		{
+			std::vector<CKInfo> vckInfos;
+			for(size_t i = 0; i < inode.nodeSize; ++i)
+				if(!fillCKInfo(vckInfos, inode.nodes[i]))
+					return 0;
+			info.cklistSize = vckInfos.size();
+			info.cklist = new  CKInfo[vckInfos.size()];
+			for(size_t i = 0; i < vckInfos.size(); ++i)
+				info.cklist[i] = vckInfos[i];
+		}
+		else
+		{
+			info.cklistSize = 0;
+			info.cklist = 0;
+		}
+		if(!tryLock(info.sfInfo, type))
+		{
+			setErrno(ERR_FLOCKED);
+			return 0;
+		}
+		rsfd = getFreeMFd();
+		_fdmmap[rsfd] = info;
+		_cpmap[cur] = rsfd;
+	}
+	else
+	{
+		rsfd = it->second;
+		if(!tryLock(_fdmmap[rsfd].sfInfo, type))
+		{
+			setErrno(ERR_FLOCKED);
+			return 0;
+		}
+		++_fdmmap[rsfd].openCount;
+	}
+	FDSInfo sinfo;
+	sinfo.model = type;
+	sinfo.tfd = rsfd;
+	sinfo.sfd = getFreeSFd();
+	sinfo.ckpos = 0;
+	sinfo.rlpos = 0;
+	sinfo.abpos = 0;
+	sinfo.tid = std::this_thread::get_id();
+	_thmap[std::this_thread::get_id()].push_back(sinfo);
+	_fdsmap[sinfo.sfd] = (--_thmap[std::this_thread::get_id()].end());
+	flushHandler(_fdmmap[rsfd]);
+	return sinfo.sfd;
 }
 
 #endif

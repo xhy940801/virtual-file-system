@@ -3,6 +3,7 @@
 
 #include "types.h"
 #include <ctime>
+#include <thread>
 
 /**
  * sign:
@@ -120,10 +121,13 @@ struct FDMInfo
 struct FDSInfo
 {
 	fdtype_t model;
-	int fd;
+	int tfd, sfd;
 	size_t ckpos;
 	size_t rlpos;
 	size_t abpos;
+	std::thread::id tid;
 };
+
+
 
 #endif

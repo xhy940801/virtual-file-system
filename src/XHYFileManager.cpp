@@ -1,9 +1,10 @@
 #include "XHYFileManager.h"
 
 #include <ctime>
+#include <cstring>
 
 XHYFileManager::XHYFileManager(DiskDriver* dvr)
-	: driver(dvr), chunkSize(dvr->getChunkSize())
+	: _cmfd(0), _csfd(0), driver(dvr), chunkSize(dvr->getChunkSize())
 {
 	driver->getChunk(0, &header, sizeof(header));
 	for(size_t i = 0; i < HANDLERSIZE; ++i)
@@ -137,18 +138,182 @@ bool XHYFileManager::getItemSafeInfo(const char* path, SafeInfo* info)
 	return true;
 }
 
-void getItemSafeInfo::bindThread(std::thread::id thId)
+void XHYFileManager::bindThread(std::thread::id thId)
 {
 	std::lock_guard<std::mutex> lck (mtx);
-	_thmap[thId] = std::vector<FDSInfo>();
+	_thmap[thId] = std::list<FDSInfo>();
+	_errno[std::this_thread::get_id()] = 0;
 }
 
-void getItemSafeInfo::releaseThread(std::thread::id thId)
+void XHYFileManager::releaseThread(std::thread::id thId)
 {
 	std::lock_guard<std::mutex> lck (mtx);
-	auto& vec = _thmap[thId];
-	for(size_t i = 0; i < vec.size(); ++i)
-		vec[i].
+	auto& list = _thmap[thId];
+	for(auto it = list.begin(); it != list.end(); ++it)
+		releaseFd(*it);
+	_thmap.erase(_thmap.find(thId));
+	_errno.erase(_errno.find(std::this_thread::get_id()));
+}
+
+bool XHYFileManager::close(int fd)
+{
+	std::lock_guard<std::mutex> lck (mtx);
+	if(!isOwner(fd))
+	{
+		setErrno(ERR_PMS_DENY);
+		return false;
+	}
+	auto it = _fdsmap[fd];
+	releaseFd(*it);
+	_thmap[std::this_thread::get_id()].erase(it);
+	return true;
+}
+
+int XHYFileManager::read(int fd, void* buf, size_t len)
+{
+	std::lock_guard<std::mutex> lck (mtx);
+	if(!isOwner(fd))
+	{
+		setErrno(ERR_PMS_DENY);
+		return -1;
+	}
+	FDSInfo& info = *_fdsmap[fd];
+	if(!(info.model & OPTYPE_READ))
+	{
+		setErrno(ERR_PMS_DENY);
+		return -1;
+	}
+	FDMInfo& mInfo = _fdmmap[info.tfd];
+	if(info.abpos == mInfo.fileSize - 1)
+	{
+		setErrno(ERR_EOF);
+		return -1;
+	}
+	if(info.abpos + len >= mInfo.fileSize)
+		len = mInfo.fileSize - info.abpos;
+	size_t cp = 0;
+	while(true)
+	{
+		if(cp == len)
+			break;
+		if(mInfo.cklistSize == 0)
+		{
+			if(!load(mInfo.hdpos, 0))
+				return -1;
+			memcpy(((char*) buf) + cp, bufHandlers[0].buf + sizeof(SafeInfo) + sizeof(INInfo) + info.abpos, len);
+			cp += len;
+			_seek(mInfo, info, (int) cp, XHYFileManager::cur);
+		}
+		else
+		{
+			size_t clcp = info.rlpos / chunkSize;
+			size_t clsp = info.rlpos % chunkSize;
+			size_t clrd = len - cp < chunkSize - clsp ? len - cp : chunkSize - clsp;
+			if(!load(mInfo.cklist[info.ckpos].pos + clcp, 0))
+				return -1;
+			memcpy(((char*) buf) + cp, bufHandlers[0].buf + clsp, clrd);
+			cp += clrd;
+			info.rlpos += clrd;
+			info.abpos += clrd;
+			if(info.abpos == mInfo.fileSize)
+			{
+				_seek(mInfo, info, 0, XHYFileManager::end);
+				break;
+			}
+			if(info.rlpos == mInfo.cklist[info.ckpos].num * chunkSize)
+			{
+				while(mInfo.cklist[++info.ckpos].num == 0);
+				info.rlpos = 0;
+			}
+		}
+	}
+	return cp;
+}
+
+int XHYFileManager::write(int fd, const void* buf, size_t len)
+{
+	std::lock_guard<std::mutex> lck (mtx);
+	if(!isOwner(fd))
+	{
+		setErrno(ERR_PMS_DENY);
+		return -1;
+	}
+	FDSInfo& info = *_fdsmap[fd];
+	if(!(info.model & OPTYPE_WRITE))
+	{
+		setErrno(ERR_PMS_DENY);
+		return -1;
+	}
+	FDMInfo& mInfo = _fdmmap[info.tfd];
+	if(info.abpos + len > mInfo.fileSize)
+	{
+		if(!appendFile(mInfo, info.abpos + len - mInfo.fileSize))
+			return -1;
+		_seek(mInfo, info, info.abpos, XHYFileManager::beg);
+		len = mInfo.fileSize - info.abpos;
+	}
+	size_t cp = 0;
+	while(true)
+	{
+		if(cp == len)
+			break;
+		if(mInfo.cklistSize == 0)
+		{
+			if(!load(mInfo.hdpos, 0))
+				return -1;
+			memcpy(bufHandlers[0].buf + sizeof(SafeInfo) + sizeof(INInfo) + info.abpos, ((char*) buf) + cp, len);
+			cp += len;
+			_seek(mInfo, info, (int) cp, XHYFileManager::cur);
+		}
+		else
+		{
+			size_t clcp = info.rlpos / chunkSize;
+			size_t clsp = info.rlpos % chunkSize;
+			size_t clrd = len - cp < chunkSize - clsp ? len - cp : chunkSize - clsp;
+			if(!load(mInfo.cklist[info.ckpos].pos + clcp, 0))
+				return -1;
+			memcpy(bufHandlers[0].buf + clsp, ((char*) buf) + cp, clrd);
+			cp += clrd;
+			info.rlpos += clrd;
+			info.abpos += clrd;
+			if(info.abpos == mInfo.fileSize)
+				_seek(mInfo, info, 0, XHYFileManager::end);
+			else if(info.rlpos == mInfo.cklist[info.ckpos].num * chunkSize)
+			{
+				while(mInfo.cklist[++info.ckpos].num == 0);
+				info.rlpos = 0;
+			}
+		}
+		flush();
+	}
+	return cp;
+}
+
+size_t XHYFileManager::tell(int fd)
+{
+	std::lock_guard<std::mutex> lck (mtx);
+	if(!isOwner(fd))
+	{
+		setErrno(ERR_PMS_DENY);
+		return false;
+	}
+	FDSInfo& info = *_fdsmap[fd];
+	return info.abpos;
+}
+
+size_t XHYFileManager::seek(int fd, int offset, FPos pos)
+{
+	std::lock_guard<std::mutex> lck (mtx);
+	if(!isOwner(fd))
+	{
+		setErrno(ERR_PMS_DENY);
+		return false;
+	}
+	FDSInfo& info = *_fdsmap[fd];
+	FDMInfo& mInfo = _fdmmap[info.tfd];
+	size_t old = info.abpos;
+	_seek(mInfo, info, offset, pos);
+	return old;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -157,7 +322,7 @@ void getItemSafeInfo::releaseThread(std::thread::id thId)
 
 bool XHYFileManager::createFolder(cpos_t parent, const char* name, uidsize_t uid)
 {
-	size_t ts;
+	cksize_t ts;
 	cpos_t pos = getFreeChunk(1, ts);
 	if(ts == 0)
 		return false;
@@ -179,7 +344,7 @@ bool XHYFileManager::createFolder(cpos_t parent, const char* name, uidsize_t uid
 
 bool XHYFileManager::createFile(cpos_t parent, const char* name, uidsize_t uid)
 {
-	size_t ts;
+	cksize_t ts;
 	cpos_t pos = getFreeChunk(1, ts);
 	if(ts == 0)
 		return false;
@@ -199,7 +364,7 @@ bool XHYFileManager::createFile(cpos_t parent, const char* name, uidsize_t uid)
 	return true;
 }
 
-cpos_t XHYFileManager::getFreeChunk(size_t expected, size_t& had)
+cpos_t XHYFileManager::getFreeChunk(cksize_t expected, cksize_t& had)
 {
 	if(header.freeChunkHead == 0)
 	{
@@ -299,7 +464,7 @@ bool XHYFileManager::createBlankFile(cpos_t parent, cpos_t cur, uidsize_t uid)
 	char tmp[sizeof(INInfo) + sizeof(SafeInfo)];
 	SafeInfo &sfInfo = * (SafeInfo*) tmp;
 	INInfo &info = * (INInfo*) (tmp + sizeof(SafeInfo));
-	sfInfo.sign = PM_U_READ | PM_U_WRITE;
+	sfInfo.sign = PM_U_READ | PM_U_WRITE | FL_TYPE_FILE;
 	sfInfo.mutexRead = sfInfo.shareRead = sfInfo.shareWrite = 0;
 	sfInfo.uid = uid;
 	info.modified = info.created = time(0);
@@ -328,7 +493,7 @@ bool XHYFileManager::addItemToFolder(Folder folder, cpos_t target, const char* n
 	}
 	else if(folder.info->next == 0)
 	{
-		size_t ts;
+		cksize_t ts;
 		cpos_t pos = getFreeChunk(1, ts);
 		if(ts == 0)
 			return false;
@@ -349,7 +514,7 @@ bool XHYFileManager::addItemToFolder(Folder folder, cpos_t target, const char* n
 			AppendFloderNode* tapdFN = (AppendFloderNode*) bufHandlers[1].buf;
 			if(capdFN == 0)
 			{
-				size_t ts;
+				cksize_t ts;
 				cpos_t pos = getFreeChunk(1, ts);
 				if(ts == 0)
 					return false;
@@ -382,7 +547,7 @@ bool XHYFileManager::addItemToFolder(Folder folder, cpos_t target, const char* n
 			capdFN = tapdFN->next;
 		}
 	}
-	folder.modified = time(0);
+	folder.info->modified = time(0);
 	return true;
 }
 
@@ -512,27 +677,367 @@ int XHYFileManager::getErrno()
 
 inline void XHYFileManager::releaseFd(FDSInfo& info)
 {
-	FDMInfo &mInfo = _fdmap[info.fd];
-	if(--mInfo.openCoune == 0)
+	_fdsmap.erase(_fdsmap.find(info.sfd));
+	FDMInfo &mInfo = _fdmmap[info.tfd];
+	if(--mInfo.openCount == 0)
 	{
 		flushHandler(mInfo);
-		_fdmap.erase(_fdmap.find(info.fd));
+		if(mInfo.cklist)
+			delete mInfo.cklist;
+		_cpmap.erase(_cpmap.find(mInfo.hdpos));
+		_fdmmap.erase(_fdmmap.find(info.tfd));
 	}
 	else
 	{
-		if(mInfo.model & OPTYPE_WTE_MTX_LOCK)
+		if(info.model & OPTYPE_WTE_MTX_LOCK)
 			mInfo.sfInfo.sign &= ~FL_WRITE_MTXLOCK;
-		else if(mInfo.model & OPTYPE_WTE_SHR_LOCK)
+		else if(info.model & OPTYPE_WTE_SHR_LOCK)
 			--mInfo.sfInfo.shareWrite;
-		else if(mInfo.model & OPTYPE_RAD_MTX_LOCK)
+		else if(info.model & OPTYPE_RAD_MTX_LOCK)
 			--mInfo.sfInfo.mutexRead;
-		else if(mInfo.model & OPTYPE_RAD_SHR_LOCK)
+		else if(info.model & OPTYPE_RAD_SHR_LOCK)
 			--mInfo.sfInfo.shareRead;
-		flushHandler(minfo);
+		if(info.model & OPTYPE_WRITE)
+			flushHandler(mInfo, time(0));
+		else
+			flushHandler(mInfo);
 	}
 }
 
 inline void XHYFileManager::flushHandler(FDMInfo& info)
 {
 	driver->setChunk(info.hdpos, &info.sfInfo, sizeof(info.sfInfo));
+}
+
+inline void XHYFileManager::flushHandler(FDMInfo& info, time_t modified)
+{
+	char *tmp = new char[sizeof(SafeInfo) + sizeof(INInfo)];
+	driver->getChunk(info.hdpos, tmp, sizeof(SafeInfo) + sizeof(INInfo));
+	SafeInfo* psi = (SafeInfo*) tmp;
+	INInfo* pini = (INInfo*) (tmp + sizeof(SafeInfo));
+	*psi = info.sfInfo;
+	pini->modified = modified;
+	driver->setChunk(info.hdpos, tmp, sizeof(SafeInfo) + sizeof(INInfo));
+}
+
+int XHYFileManager::getFreeMFd()
+{
+	while(true)
+	{
+		int cr = _cmfd;
+		++_cmfd;
+		if(cr == 0)
+			continue;
+		if(_fdmmap.find(cr) == _fdmmap.end())
+			return cr;
+	}
+}
+
+int XHYFileManager::getFreeSFd()
+{
+	while(true)
+	{
+		int cr = _csfd;
+		++_csfd;
+		if(cr == 0)
+			continue;
+		if(_fdsmap.find(cr) == _fdsmap.end())
+			return cr;
+	}
+}
+
+bool XHYFileManager::fillCKInfo(std::vector<CKInfo>& vec, CKInfo& info)
+{
+	if(info.num > 0)
+	{
+		vec.push_back(info);
+		return true;
+	}
+	if(!driver->getChunk(info.pos, bufHandlers[1].buf, chunkSize))
+	{
+		setErrno(ERR_SYS_LOADFAIL);
+		return false;
+	}
+	ChunkHelper chpr(bufHandlers[1].buf, chunkSize);
+	size_t cklen = chpr.getAPCKLen();
+	CKInfo* ckInfo = chpr.getAPCKInfo();
+	for(size_t i = 0; i < cklen; ++i)
+		if(!fillCKInfo(vec, ckInfo[i]))
+			return false;
+	return true;
+}
+
+bool XHYFileManager::delNode(CKInfo* info)
+{
+	if(info->num == 0)
+	{
+		if(!driver->getChunk(info->pos, bufHandlers[3].buf, chunkSize))
+		{
+			setErrno(ERR_SYS_LOADFAIL);
+			return false;
+		}
+		ChunkHelper chpr(bufHandlers[3].buf, chunkSize);
+		size_t cklen = chpr.getAPCKLen();
+		CKInfo* ckInfo = chpr.getAPCKInfo();
+		for(size_t i = 0; i < cklen; ++i)
+			if(!delNode(&ckInfo[i]))
+				return false;
+		releaseChunk(info->pos, 1);
+	}
+	else if(info->num > 0)
+		releaseChunk(info->pos, info->num);
+	return true;
+}
+
+bool XHYFileManager::tryLock(SafeInfo& sfInfo, fdtype_t type)
+{
+	if(type & OPTYPE_WTE_MTX_LOCK)
+	{
+		if(sfInfo.sign & FL_WRITE_MTXLOCK || sfInfo.mutexRead || sfInfo.shareRead || sfInfo.shareWrite)
+			return false;
+		sfInfo.sign |= FL_WRITE_MTXLOCK;
+	}
+	else if(type & OPTYPE_WTE_SHR_LOCK)
+	{
+		if(sfInfo.sign & FL_WRITE_MTXLOCK || sfInfo.mutexRead)
+			return false;
+		++sfInfo.shareWrite;
+	}
+	else if(type & OPTYPE_RAD_MTX_LOCK)
+	{
+		if(sfInfo.sign & FL_WRITE_MTXLOCK || sfInfo.shareWrite)
+			return false;
+		++sfInfo.mutexRead;
+	}
+	else if(type & OPTYPE_RAD_SHR_LOCK)
+	{
+		if(sfInfo.sign & FL_WRITE_MTXLOCK)
+			return false;
+		++sfInfo.shareRead;
+	}
+	return true;
+}
+
+bool XHYFileManager::isOwner(int fd)
+{
+	auto it = _fdsmap.find(fd);
+	if(it == _fdsmap.end())
+		return false;
+	if(it->second->tid != std::this_thread::get_id())
+		return false;
+	return true;
+}
+
+bool XHYFileManager::appendFile(FDMInfo& mInfo, size_t len)
+{
+	std::vector<CKInfo> apVec;
+	while(len)
+	{
+		if(mInfo.fileSize + sizeof(SafeInfo) + sizeof(INInfo) <= chunkSize)
+		{
+			if(mInfo.fileSize + sizeof(SafeInfo) + sizeof(INInfo) + len <= chunkSize)
+			{
+				mInfo.fileSize += len;
+				return true;
+			}
+			else
+			{
+				IndexNode inode = loadINode(mInfo.hdpos, 0);
+				if(inode.cur == 0)
+					return false;
+				size_t ndckn = (len + mInfo.fileSize + chunkSize - 1) / chunkSize;
+				cksize_t tckn;
+				cpos_t st = getFreeChunk(ndckn, tckn);
+				if(tckn == 0)
+					return false;
+				if(!load(st, 1))
+					return false;
+				memcpy(bufHandlers[1].buf, bufHandlers[0].buf + sizeof(SafeInfo) + sizeof(INInfo), mInfo.fileSize);
+				* ((size_t*) (bufHandlers[0].buf + sizeof(SafeInfo) + sizeof(INInfo))) = 1;
+				inode.nodes[0] = {tckn, st};
+				apVec.push_back(inode.nodes[0]);
+				size_t fiy = tckn * chunkSize < mInfo.fileSize + len ? tckn * chunkSize : mInfo.fileSize + len;
+				size_t tap = fiy - mInfo.fileSize;
+				mInfo.fileSize = fiy;
+				len -= tap;
+			}
+		}
+		else if(mInfo.fileSize % chunkSize != 0)
+		{
+			size_t tap = chunkSize - mInfo.fileSize % chunkSize < len ? chunkSize - mInfo.fileSize % chunkSize : len;
+			mInfo.fileSize += tap;
+			len -= tap;
+		}
+		else
+		{
+			IndexNode inode = loadINode(mInfo.hdpos, 0);
+			if(inode.cur == 0)
+				return false;
+			size_t ndckn = (len + chunkSize - 1) / chunkSize;
+			cksize_t tckn;
+			cpos_t st = getFreeChunk(ndckn, tckn);
+			if(tckn == 0)
+				return false;
+			if(inode.nodeSize * sizeof(CKInfo) + sizeof(SafeInfo) + sizeof(INInfo) + sizeof(size_t) + sizeof(CKInfo) <= chunkSize)
+			{
+				++(* ((size_t*) (bufHandlers[0].buf + sizeof(SafeInfo) + sizeof(INInfo))));
+				inode.nodes[inode.nodeSize] = {tckn, st};
+				apVec.push_back(inode.nodes[inode.nodeSize]);
+			}
+			else if(inode.nodes[inode.nodeSize - 1].num != 0)
+			{
+				cksize_t tg;
+				cpos_t st2 = getFreeChunk(1, tg);
+				if(tg == 0)
+					return false;
+				(* (AppendINode*) bufHandlers[1].buf).nodeSize = 2;
+				bufHandlers[1].pos = st2;
+				CKInfo* ckInfos = (CKInfo*) (bufHandlers[1].buf + sizeof(AppendINode));
+
+				ckInfos[0] = inode.nodes[inode.nodeSize - 1];
+				ckInfos[1] = {tckn, st};
+
+				inode.nodes[inode.nodeSize - 1] = {0, st2};
+				apVec.push_back(ckInfos[1]);
+			}
+			else
+			{
+				cpos_t apinPos = inode.nodes[inode.nodeSize - 1].pos;
+				while(true)
+				{
+					if(!load(apinPos, 1))
+						return false;
+					AppendINode* papin = (AppendINode*) bufHandlers[1].buf;
+					CKInfo* ckInfos = (CKInfo*) (bufHandlers[1].buf + sizeof(AppendINode));
+					if(sizeof(AppendINode) + (papin->nodeSize + 1) * sizeof(CKInfo) <= chunkSize)
+					{
+						++papin->nodeSize;
+						ckInfos[papin->nodeSize] = {tckn, st};
+						apVec.push_back(ckInfos[papin->nodeSize]);
+						break;
+					}
+					else if(ckInfos[papin->nodeSize - 1].num != 0)
+					{
+						cksize_t tg;
+						cpos_t st2 = getFreeChunk(1, tg);
+						if(tg == 0)
+							return false;
+						(* (AppendINode*) bufHandlers[2].buf).nodeSize = 2;
+						bufHandlers[2].pos = st2;
+						CKInfo* ckInfos = (CKInfo*) (bufHandlers[2].buf + sizeof(AppendINode));
+
+						ckInfos[0] = inode.nodes[inode.nodeSize - 1];
+						ckInfos[1] = {tckn, st};
+
+						inode.nodes[inode.nodeSize - 1] = {0, st2};
+						apVec.push_back(ckInfos[1]);
+						break;
+					}
+					else
+						apinPos = ckInfos[papin->nodeSize - 1].pos;
+				}
+			}
+			size_t fiy = len < tckn * chunkSize ? len : tckn * chunkSize;
+			len -= fiy;
+			mInfo.fileSize += fiy;
+		}
+		flush();
+	}
+	CKInfo* oldlist = mInfo.cklist;
+	mInfo.cklist = new CKInfo[mInfo.cklistSize + apVec.size()];
+	memcpy(mInfo.cklist, oldlist, sizeof(CKInfo) * mInfo.cklistSize);
+	memcpy(mInfo.cklist + mInfo.cklistSize, apVec.data(), sizeof(CKInfo) * apVec.size());
+	mInfo.cklistSize += apVec.size();
+	delete[] oldlist;
+	return true;
+}
+
+void XHYFileManager::_seek(FDMInfo& mInfo, FDSInfo& info, int offset, FPos pos)
+{
+	if(pos == XHYFileManager::cur && offset < 0)
+	{
+		size_t aboft = -offset;
+		if(aboft >= info.abpos)
+		{
+			info.ckpos = 0;
+			info.rlpos = 0;
+			info.abpos = 0;
+			return;
+		}
+		info.abpos -= aboft;
+		if(mInfo.cklistSize == 0)
+		{
+			info.rlpos = info.abpos;
+			return;
+		}
+		while(aboft)
+		{
+			if(aboft > info.rlpos)
+			{
+				aboft -= info.rlpos - 1;
+				--info.ckpos;
+				info.rlpos = chunkSize * mInfo.cklist[info.ckpos].num;
+			}
+			else
+			{
+				info.rlpos -= aboft;
+				aboft = 0;
+			}
+		}
+	}
+	else if(pos == XHYFileManager::cur && offset >= 0)
+	{
+		size_t aboft = offset;
+		if(mInfo.cklistSize == 0)
+		{
+			info.abpos += aboft;
+			info.rlpos = info.abpos;
+			return;
+		}
+		if(aboft + info.abpos >= mInfo.fileSize)
+		{
+			info.ckpos = mInfo.cklistSize - 1;
+			info.abpos = mInfo.fileSize;
+			info.rlpos = (mInfo.cklist[mInfo.cklistSize - 1].num - 1) * chunkSize
+					+ mInfo.fileSize % chunkSize == 0 ? chunkSize : mInfo.fileSize % chunkSize;
+			return;
+		}
+		info.abpos += aboft;
+		while(aboft)
+		{
+			if(aboft + info.rlpos < mInfo.cklist[info.ckpos].num * chunkSize)
+			{
+				info.rlpos += aboft;
+				aboft = 0;
+			}
+			else
+			{
+				aboft -= (mInfo.cklist[info.ckpos].num * chunkSize - info.rlpos );
+				++info.ckpos;
+				info.rlpos = 0;
+			}
+		}
+	}
+	else if(pos == XHYFileManager::beg)
+	{
+		info.ckpos = 0;
+		info.rlpos = 0;
+		info.abpos = 0;
+		_seek(mInfo, info, offset, XHYFileManager::cur);
+	}
+	else
+	{
+		if(mInfo.cklistSize == 0)
+		{
+			info.ckpos = 0;
+			info.rlpos = mInfo.fileSize;
+			info.abpos = mInfo.fileSize;
+			return;
+		}
+		info.ckpos = mInfo.cklistSize - 1;
+		info.abpos = mInfo.fileSize;
+		info.rlpos = (mInfo.cklist[mInfo.cklistSize - 1].num - 1) * chunkSize
+				+ mInfo.fileSize % chunkSize == 0 ? chunkSize : mInfo.fileSize % chunkSize;
+		_seek(mInfo, info, offset, XHYFileManager::cur);
+	}
 }
