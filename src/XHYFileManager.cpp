@@ -184,7 +184,7 @@ int XHYFileManager::read(int fd, void* buf, size_t len)
 		return -1;
 	}
 	FDMInfo& mInfo = _fdmmap[info.tfd];
-	if(info.abpos == mInfo.fileSize - 1)
+	if(info.abpos >= mInfo.fileSize)
 	{
 		setErrno(ERR_EOF);
 		return -1;
