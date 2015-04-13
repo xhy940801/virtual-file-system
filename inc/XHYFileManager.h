@@ -126,8 +126,8 @@ public:
 	int read(int fd, void* buf, size_t len);
 	int write(int fd, const void* buf, size_t len);
 
-	size_t tell(int fd);
-	size_t seek(int fd, int offset, FPos pos);
+	int tell(int fd);
+	int seek(int fd, int offset, FPos pos);
 
 	template <typename CheckPms>
 	bool changeSafeInfo(const char* path, SafeInfo* newInfo, CheckPms pms);
@@ -342,7 +342,7 @@ int XHYFileManager::open(const char* path, fdtype_t type, CheckPms pms)
 			setErrno(ERR_PATH_IS_NOT_FILE);
 			return 0;
 		}
-		int err = pms(inode.sfInfo);
+		int err = pms(inode.sfInfo, type);
 		if(err != 0)
 		{
 			setErrno(err);

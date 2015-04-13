@@ -286,29 +286,29 @@ int XHYFileManager::write(int fd, const void* buf, size_t len)
 	return cp;
 }
 
-size_t XHYFileManager::tell(int fd)
+int XHYFileManager::tell(int fd)
 {
 	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(!isOwner(fd))
 	{
 		setErrno(ERR_PMS_DENY);
-		return false;
+		return -1;
 	}
 	FDSInfo& info = *_fdsmap[fd];
 	return info.abpos;
 }
 
-size_t XHYFileManager::seek(int fd, int offset, FPos pos)
+int XHYFileManager::seek(int fd, int offset, FPos pos)
 {
 	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(!isOwner(fd))
 	{
 		setErrno(ERR_PMS_DENY);
-		return false;
+		return -1;
 	}
 	FDSInfo& info = *_fdsmap[fd];
 	FDMInfo& mInfo = _fdmmap[info.tfd];
-	size_t old = info.abpos;
+	int old = info.abpos;
 	_seek(mInfo, info, offset, pos);
 	return old;
 }

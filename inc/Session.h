@@ -41,10 +41,14 @@ private:
 	void writeFile();
 	void seekFile();
 	void tellFile();
+	void closeFile();
 	void deleteItem();
 	void getItemSafeInfo();
 	void formatDisk();
 	void logout();
+	void cmdError();
+	void addUsr();
+	void changePsd();
 private:
 	uidsize_t validAuth(char* username, char* password);
 	int pathValidateR(char* path, bool type, SafeInfo* sfInfo);
