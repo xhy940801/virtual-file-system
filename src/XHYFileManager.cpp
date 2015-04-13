@@ -479,6 +479,11 @@ bool XHYFileManager::createBlankFile(cpos_t parent, cpos_t cur, uidsize_t uid)
 
 bool XHYFileManager::addItemToFolder(Folder folder, cpos_t target, const char* name)
 {
+	if(strlen(name) > 15)
+	{
+		setErrno(ERR_NAME_OVERLENGTH);
+		return false;
+	}
 	if(checkHad(folder.nodes, folder.info->nodeSize, name))
 	{
 		setErrno(ERR_NME_CONFLICT);

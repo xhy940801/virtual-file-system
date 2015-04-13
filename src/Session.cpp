@@ -5,9 +5,10 @@
 
 #include <sys/types.h>
 #include <cstdio>
+#include <memory>
 
 Session::Session(XHYFileManager* mgr, int sock)
-	: manager(mgr), socket(sock)
+	: manager(mgr), socket(sock), userId(0)
 {
 	printConnectionInfo();
 }
@@ -51,10 +52,12 @@ void Session::rlogin()
 	if(!readSBuf(password, _MAXPSDSIZE))
 		return;
 	char rrs;
-	if(validAuth(username, password))
+	uidsize_t uid = validAuth(username, password);
+	if(uid)
 	{
 		char rrs = 1;
 		status = Session::LOOPING;
+		userId = uid;
 	}
 	else
 		char rrs = 0;
@@ -277,7 +280,192 @@ uidsize_t Session::validAuth(char* username, char* password)
 	}
 }
 
-void Session::createFile()
+int Session::pathValidateR(char* path, bool type, SafeInfo* sfInfo)
+{
+	SafeInfo sfInfo;
+	if(!manager->getItemSafeInfo(path.get(), sfInfo))
+		return manager->getErrno();
+	else
+	{
+		if(((bool) sfInfo.sign & FL_TYPE_FILE) == type)
+			return 2
+		else if(!((sfInfo.uid == userId && sfInfo.sign & PM_U_READ) || (sfInfo.uid != userId && sfInfo.sign & PM_O_READ)))
+			return 3;
+		return 0;
+	}
+}
+
+int Session::pathValidateW(char* path, bool type, SafeInfo* sfInfo)
 {
 	
+	if(!manager->getItemSafeInfo(path.get(), sfInfo))
+		return manager->getErrno();
+	else
+	{
+		if(((bool) sfInfo.sign & FL_TYPE_FILE) == type)
+			return 2
+		else if(!((sfInfo.uid == userId && sfInfo.sign & PM_U_WRITE) || (sfInfo.uid != userId && sfInfo.sign & PM_O_WRITE)))
+			return 3;
+		return 0;
+	}
+}
+
+void Session::createFile()
+{
+	unsigned short pathLen;
+	if(!readSBuf((char*) &pathLen, sizeof(pathLen)))
+		return;
+	std::auto_ptr<char> path = new char[pathLen + 2];
+	if(!readSBuf(path.get(), pathLen))
+		return;
+	path.get()[pathLen] = '\0';
+	unsigned char nameLen;
+	if(!readSBuf(char*) &nameLen, sizeof(nameLen))
+		return;
+	std::auto_ptr<char> name = new char[nameLen + 1];
+	if(!readSBuf(name.get(), nameLen))
+		return;
+	name.get()[nameLen] = '\0';
+
+	int rss = 0;
+	std::lock_guard<XHYFileManager> lck(*manager);
+	SafeInfo sfInfo;
+	rss = checkPathAuthValidW(path.get(), 0, &sfInfo);
+	if(rss == 0)
+	{
+		if(!manager->createFile(path.get(), name.get(), userId))
+			rss = manager->getErrno();
+	}
+
+	writeSBuf(&rss, sizeof(rss));
+}
+
+void Session::createFloder()
+{
+	unsigned short pathLen;
+	if(!readSBuf((char*) &pathLen, sizeof(pathLen)))
+		return;
+	std::auto_ptr<char> path = new char[pathLen + 1];
+	if(!readSBuf(path.get(), pathLen))
+		return;
+	path.get()[pathLen] = '\0';
+	unsigned char nameLen;
+	if(!readSBuf(char*) &nameLen, sizeof(nameLen))
+		return;
+	std::auto_ptr<char> name = new char[nameLen + 1];
+	if(!readSBuf(name.get(), nameLen))
+		return;
+	name.get()[nameLen] = '\0';
+
+	int rss = 0;
+	std::lock_guard<XHYFileManager> lck(*manager);
+	SafeInfo sfInfo;
+	rss = checkPathAuthValidW(path.get(), 0, &sfInfo);
+	if(rss == 0)
+	{
+		if(!manager->createFloder(path.get(), name.get(), userId))
+			rss = manager->getErrno();
+	}
+
+	writeSBuf(&rss, sizeof(rss));
+}
+
+void Session::readFloder()
+{
+	unsigned short pathLen;
+	if(!readSBuf((char*) &pathLen, sizeof(pathLen)))
+		return;
+	std::auto_ptr<char> path = new char[pathLen + 1];
+	if(!readSBuf(path.get(), pathLen))
+		return;
+	path.get()[pathLen] = '\0';
+	SafeInfo sfInfo;
+	int rss = pathValidateR(path.get(), 0, &sfInfo);
+	if(rss == 0)
+	{
+		std::auto_ptr<FileNode> fnodes = new FileNode[20];
+		if(!writeSBuf(&rss, sizeof(rss)))
+			return;
+		int len, start = 0;
+		while(true)
+		{
+			len = manager->readFloder(path, start, 20, fnodes.get());
+			if(len == 0)
+			{
+				char tmp = 0;
+				writeSBuf(&tmp, sizeof(tmp));
+			}
+			else if(len < 0)
+				setErr(ERR_SYS_ERROR);
+			else
+			{
+				for(int i = 0; i < len; ++i)
+				{
+					char nlen = strlen(fnodes.get()[i].name);
+					writeSBuf(&nlen, sizeof(nlen));
+					writeSBuf(fnodes.get()[i].name, nlen);
+				}
+				continue;
+			}
+			break;
+		}
+	}
+	else
+		writeSBuf(&rss, sizeof(rss));
+}
+
+void Session::changeModel()
+{
+	fsign sign;
+	std::auto_ptr<char> path = new char[pathLen + 1];
+	if(!readSBuf(path.get(), pathLen))
+		return;
+	if(!readSBuf((char*) sign, sizeof(sign)))
+		return;
+	int rss = pathValidateR(path.get(), 0, &sfInfo);
+}
+
+void Session::openFile()
+{
+
+}
+
+void Session::readFile()
+{
+
+}
+
+void Session::writeFile()
+{
+
+}
+
+void Session::seekFile()
+{
+
+}
+
+void Session::tellFile()
+{
+
+}
+
+void Session::deleteItem()
+{
+
+}
+
+void Session::getItemSafeInfo()
+{
+
+}
+
+void Session::formatDisk()
+{
+
+}
+
+void Session::logout()
+{
+
 }

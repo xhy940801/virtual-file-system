@@ -13,6 +13,8 @@ private:
 	Status status;
 	int err;
 private:
+	uidsize_t userId;
+private:
 	void rlogin();
 	void rloop();
 
@@ -37,13 +39,16 @@ private:
 	void openFile();
 	void readFile();
 	void writeFile();
+	void seekFile();
+	void tellFile();
 	void deleteItem();
 	void getItemSafeInfo();
 	void formatDisk();
 	void logout();
-	void cmdError();
 private:
 	uidsize_t validAuth(char* username, char* password);
+	int pathValidateR(char* path, bool type, SafeInfo* sfInfo);
+	int pathValidateW(char* path, bool type, SafeInfo* sfInfo);
 public:
 	Session(XHYFileManager* mgr, int sock);
 	void run();
