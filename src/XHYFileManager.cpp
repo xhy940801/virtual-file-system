@@ -21,7 +21,7 @@ XHYFileManager::~XHYFileManager()
 
 bool XHYFileManager::initFS()
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	header.capacity = driver->getTotalChunkNumber() * chunkSize;
 	header.remain = header.capacity - 2 * chunkSize;
 	header.freeChunkHead = 2;
@@ -41,7 +41,7 @@ bool XHYFileManager::initFS()
 
 bool XHYFileManager::createFile(const char* path, const char* name, uidsize_t uid)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	cpos_t parent = loadPath(path, strlen(path));
 	if(parent == 0)
 		return false;
@@ -50,7 +50,7 @@ bool XHYFileManager::createFile(const char* path, const char* name, uidsize_t ui
 
 bool XHYFileManager::createFolder(const char* path, const char* name, uidsize_t uid)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	cpos_t parent = loadPath(path, strlen(path));
 	if(parent == 0)
 		return false;
@@ -59,7 +59,7 @@ bool XHYFileManager::createFolder(const char* path, const char* name, uidsize_t 
 
 int XHYFileManager::readFolder(const char* path, size_t start, size_t len, FileNode* result)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(path[0] != '/')
 	{
 		setErrno(ERR_PATH_NOTEXT);
@@ -123,7 +123,7 @@ int XHYFileManager::readFolder(const char* path, size_t start, size_t len, FileN
 
 bool XHYFileManager::getItemSafeInfo(const char* path, SafeInfo* info)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(path[0] != '/')
 	{
 		setErrno(ERR_PATH_NOTEXT);
@@ -140,14 +140,14 @@ bool XHYFileManager::getItemSafeInfo(const char* path, SafeInfo* info)
 
 void XHYFileManager::bindThread(std::thread::id thId)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	_thmap[thId] = std::list<FDSInfo>();
 	_errno[std::this_thread::get_id()] = 0;
 }
 
 void XHYFileManager::releaseThread(std::thread::id thId)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	auto& list = _thmap[thId];
 	for(auto it = list.begin(); it != list.end(); ++it)
 		releaseFd(*it);
@@ -157,7 +157,7 @@ void XHYFileManager::releaseThread(std::thread::id thId)
 
 bool XHYFileManager::close(int fd)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(!isOwner(fd))
 	{
 		setErrno(ERR_PMS_DENY);
@@ -171,7 +171,7 @@ bool XHYFileManager::close(int fd)
 
 int XHYFileManager::read(int fd, void* buf, size_t len)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(!isOwner(fd))
 	{
 		setErrno(ERR_PMS_DENY);
@@ -185,10 +185,7 @@ int XHYFileManager::read(int fd, void* buf, size_t len)
 	}
 	FDMInfo& mInfo = _fdmmap[info.tfd];
 	if(info.abpos >= mInfo.fileSize)
-	{
-		setErrno(ERR_EOF);
-		return -1;
-	}
+		return 0;
 	if(info.abpos + len >= mInfo.fileSize)
 		len = mInfo.fileSize - info.abpos;
 	size_t cp = 0;
@@ -232,7 +229,7 @@ int XHYFileManager::read(int fd, void* buf, size_t len)
 
 int XHYFileManager::write(int fd, const void* buf, size_t len)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(!isOwner(fd))
 	{
 		setErrno(ERR_PMS_DENY);
@@ -291,7 +288,7 @@ int XHYFileManager::write(int fd, const void* buf, size_t len)
 
 size_t XHYFileManager::tell(int fd)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(!isOwner(fd))
 	{
 		setErrno(ERR_PMS_DENY);
@@ -303,7 +300,7 @@ size_t XHYFileManager::tell(int fd)
 
 size_t XHYFileManager::seek(int fd, int offset, FPos pos)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(!isOwner(fd))
 	{
 		setErrno(ERR_PMS_DENY);
@@ -394,6 +391,7 @@ cpos_t XHYFileManager::getFreeChunk(cksize_t expected, cksize_t& had)
 		header.freeChunkHead = fn.next;
 		had = fn.size;
 	}
+	header.remain -= had * chunkSize;
 	return rs;
 }
 
@@ -417,6 +415,7 @@ void XHYFileManager::releaseChunk(cpos_t pos, size_t size)
 	if(!driver->setChunk(pos, &fn, sizeof(fn)))
 		return;
 	header.freeChunkHead = pos;
+	header.remain += size * chunkSize;
 	return;
 }
 
@@ -671,7 +670,6 @@ void XHYFileManager::setErrno(int err)
 
 int XHYFileManager::getErrno()
 {
-	std::lock_guard<std::mutex> lck(mtx);
 	return _errno[std::this_thread::get_id()];
 }
 

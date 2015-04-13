@@ -1,0 +1,8 @@
+#ifndef _SERRORDEF_H
+#define _SERRORDEF_H
+
+#define ERR_SOCKET_EXCEPTION 1000
+#define ERR_VALIDATE_HEAD 1001
+#define ERR_SYS_ERROR 1002
+
+#endif

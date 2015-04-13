@@ -51,7 +51,7 @@ private:
 	int _cmfd, _csfd;
 	DiskDriver* driver;
 	const size_t chunkSize;
-	std::mutex mtx;
+	std::recursive_mutex mtx;
 	FSHeader header;
 	BufHandler bufHandlers[HANDLERSIZE];
 	std::map<std::thread::id, int> _errno;
@@ -127,6 +127,12 @@ public:
 
 	size_t tell(int fd);
 	size_t seek(int fd, int offset, FPos pos);
+
+	template <typename CheckPms>
+	bool changeSafeInfo(const char* path, SafeInfo* newInfo, CheckPms pms);
+
+	void lock() { mtx.lock(); }
+	void unlock() { mtx.unlock(); }
 };
 
 template <typename CheckPmsS>
@@ -178,7 +184,7 @@ bool XHYFileManager::delItem(cpos_t cur, CheckPmsS pms)
 template <typename CheckPmsP, typename CheckPmsS>
 bool XHYFileManager::deleteItem(const char* path, CheckPmsP pmsp, CheckPmsS pmss)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(path[0] != '/')
 	{
 		setErrno(ERR_PATH_NOTEXT);
@@ -306,7 +312,7 @@ bool XHYFileManager::deleteItem(const char* path, CheckPmsP pmsp, CheckPmsS pmss
 template <typename CheckPms>
 int XHYFileManager::open(const char* path, fdtype_t type, CheckPms pms)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if((type & OPTYPE_READ) && !(type & OPTYPE_RAD_SHR_LOCK))
 		type |= OPTYPE_RAD_MTX_LOCK;
 	if((type & OPTYPE_WRITE) && !(type & OPTYPE_WTE_SHR_LOCK))
@@ -394,6 +400,34 @@ int XHYFileManager::open(const char* path, fdtype_t type, CheckPms pms)
 	_fdsmap[sinfo.sfd] = (--_thmap[std::this_thread::get_id()].end());
 	flushHandler(_fdmmap[rsfd]);
 	return sinfo.sfd;
+}
+
+template <typename CheckPms>
+bool XHYFileManager::changeSafeInfo(const char* path, SafeInfo* newInfo, CheckPms pms)
+{
+	std::lock_guard<std::recursive_mutex> lck(mtx);
+	size_t len = strlen(path);
+	if(path[0] != '/')
+	{
+		setErrno(ERR_PATH_NOTEXT);
+		return 0;
+	}
+	cpos_t cur = loadPath(path, len);
+	if(!load(cur, 0))
+		return false;
+	SafeInfo* sfInfo = (SafeInfo*) bufHandlers[0].buf;
+	int err = pms(sfInfo);
+	if(err != 0)
+	{
+		setErrno(err);
+		return false;
+	}
+	xswap(sfInfo->sign, newInfo->sign);
+	xswap(sfInfo->uid, newInfo->uid);
+	sfInfo->sign &= ~(FL_WRITE_MTXLOCK | FL_TYPE_FILE);
+	sfInfo->sign |= newInfo->sign & (FL_WRITE_MTXLOCK | FL_TYPE_FILE);
+	flush();
+	return true;
 }
 
 #endif
