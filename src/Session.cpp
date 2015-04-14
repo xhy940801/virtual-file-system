@@ -3,6 +3,8 @@
 #include "sdef.h"
 #include "serrordef.h"
 
+#include "FileGuard.h"
+
 #include <sys/types.h>
 #include <cstdio>
 #include <memory>
@@ -708,6 +710,7 @@ void Session::formatDisk()
 		writeSBuf(&merr, sizeof(merr));
 		return;
 	}
+	FileGuard<XHYFileManager, int> fg(*manager, fd);
 	char uname[_MAXUNAMESIZE];
 	char psd[_MAXPSDSIZE];
 	memset(uname, 0, _MAXUNAMESIZE);
