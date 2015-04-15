@@ -29,6 +29,8 @@ struct SafeInfo
 	fsign sign;
 	ctsize_t mutexRead, shareRead;
 	ctsize_t shareWrite;
+	time_t created;
+	time_t modified;
 	uidsize_t uid;
 };
 
@@ -60,8 +62,6 @@ struct AppendFloderNode
 struct FloderInfo
 {
 	size_t nodeSize;
-	time_t created;
-	time_t modified;
 	cpos_t parent;
 	cpos_t next;
 };
@@ -85,9 +85,6 @@ struct CKInfo
 
 struct INInfo
 {
-	size_t nodeSize;
-	time_t created;
-	time_t modified;
 	size_t fileSize;
 	cpos_t parent;
 };

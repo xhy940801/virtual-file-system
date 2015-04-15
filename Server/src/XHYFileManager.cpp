@@ -21,7 +21,7 @@ XHYFileManager::~XHYFileManager()
 
 bool XHYFileManager::initFS()
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	header.capacity = driver->getTotalChunkNumber() * chunkSize;
 	header.remain = header.capacity - 2 * chunkSize;
 	header.freeChunkHead = 2;
@@ -41,7 +41,7 @@ bool XHYFileManager::initFS()
 
 bool XHYFileManager::createFile(const char* path, const char* name, uidsize_t uid)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	cpos_t parent = loadPath(path, strlen(path));
 	if(parent == 0)
 		return false;
@@ -50,7 +50,7 @@ bool XHYFileManager::createFile(const char* path, const char* name, uidsize_t ui
 
 bool XHYFileManager::createFolder(const char* path, const char* name, uidsize_t uid)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	cpos_t parent = loadPath(path, strlen(path));
 	if(parent == 0)
 		return false;
@@ -59,7 +59,7 @@ bool XHYFileManager::createFolder(const char* path, const char* name, uidsize_t 
 
 int XHYFileManager::readFolder(const char* path, size_t start, size_t len, FileNode* result)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(path[0] != '/')
 	{
 		setErrno(ERR_PATH_NOTEXT);
@@ -123,7 +123,7 @@ int XHYFileManager::readFolder(const char* path, size_t start, size_t len, FileN
 
 bool XHYFileManager::getItemSafeInfo(const char* path, SafeInfo* info)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(path[0] != '/')
 	{
 		setErrno(ERR_PATH_NOTEXT);
@@ -140,14 +140,14 @@ bool XHYFileManager::getItemSafeInfo(const char* path, SafeInfo* info)
 
 void XHYFileManager::bindThread(std::thread::id thId)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	_thmap[thId] = std::list<FDSInfo>();
 	_errno[std::this_thread::get_id()] = 0;
 }
 
 void XHYFileManager::releaseThread(std::thread::id thId)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	auto& list = _thmap[thId];
 	for(auto it = list.begin(); it != list.end(); ++it)
 		releaseFd(*it);
@@ -157,7 +157,7 @@ void XHYFileManager::releaseThread(std::thread::id thId)
 
 bool XHYFileManager::close(int fd)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(!isOwner(fd))
 	{
 		setErrno(ERR_PMS_DENY);
@@ -171,7 +171,7 @@ bool XHYFileManager::close(int fd)
 
 int XHYFileManager::read(int fd, void* buf, size_t len)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(!isOwner(fd))
 	{
 		setErrno(ERR_PMS_DENY);
@@ -185,10 +185,7 @@ int XHYFileManager::read(int fd, void* buf, size_t len)
 	}
 	FDMInfo& mInfo = _fdmmap[info.tfd];
 	if(info.abpos >= mInfo.fileSize)
-	{
-		setErrno(ERR_EOF);
-		return -1;
-	}
+		return 0;
 	if(info.abpos + len >= mInfo.fileSize)
 		len = mInfo.fileSize - info.abpos;
 	size_t cp = 0;
@@ -232,7 +229,7 @@ int XHYFileManager::read(int fd, void* buf, size_t len)
 
 int XHYFileManager::write(int fd, const void* buf, size_t len)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(!isOwner(fd))
 	{
 		setErrno(ERR_PMS_DENY);
@@ -289,29 +286,29 @@ int XHYFileManager::write(int fd, const void* buf, size_t len)
 	return cp;
 }
 
-size_t XHYFileManager::tell(int fd)
+int XHYFileManager::tell(int fd)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(!isOwner(fd))
 	{
 		setErrno(ERR_PMS_DENY);
-		return false;
+		return -1;
 	}
 	FDSInfo& info = *_fdsmap[fd];
 	return info.abpos;
 }
 
-size_t XHYFileManager::seek(int fd, int offset, FPos pos)
+int XHYFileManager::seek(int fd, int offset, FPos pos)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(!isOwner(fd))
 	{
 		setErrno(ERR_PMS_DENY);
-		return false;
+		return -1;
 	}
 	FDSInfo& info = *_fdsmap[fd];
 	FDMInfo& mInfo = _fdmmap[info.tfd];
-	size_t old = info.abpos;
+	int old = info.abpos;
 	_seek(mInfo, info, offset, pos);
 	return old;
 }
@@ -394,6 +391,7 @@ cpos_t XHYFileManager::getFreeChunk(cksize_t expected, cksize_t& had)
 		header.freeChunkHead = fn.next;
 		had = fn.size;
 	}
+	header.remain -= had * chunkSize;
 	return rs;
 }
 
@@ -417,6 +415,7 @@ void XHYFileManager::releaseChunk(cpos_t pos, size_t size)
 	if(!driver->setChunk(pos, &fn, sizeof(fn)))
 		return;
 	header.freeChunkHead = pos;
+	header.remain += size * chunkSize;
 	return;
 }
 
@@ -444,11 +443,11 @@ bool XHYFileManager::createBlankFolder(cpos_t parent, cpos_t cur, uidsize_t uid)
 	char tmp[sizeof(FloderInfo) + sizeof(SafeInfo)];
 	SafeInfo &sfInfo = * (SafeInfo*) tmp;
 	FloderInfo &info = * (FloderInfo*) (tmp + sizeof(SafeInfo));
-	sfInfo.sign = PM_U_READ | PM_U_WRITE;
+	sfInfo.sign = PM_U_READ | PM_U_WRITE | PM_O_READ | PM_O_WRITE;
 	sfInfo.mutexRead = sfInfo.shareRead = sfInfo.shareWrite = 0;
+	sfInfo.modified = sfInfo.created = time(0);
 	sfInfo.uid = uid;
 	info.nodeSize = 0;
-	info.modified = info.created = time(0);
 	info.parent = parent;
 	info.next = 0;
 	if(!driver->setChunk(cur, tmp, sizeof(tmp)))
@@ -466,8 +465,8 @@ bool XHYFileManager::createBlankFile(cpos_t parent, cpos_t cur, uidsize_t uid)
 	INInfo &info = * (INInfo*) (tmp + sizeof(SafeInfo));
 	sfInfo.sign = PM_U_READ | PM_U_WRITE | FL_TYPE_FILE;
 	sfInfo.mutexRead = sfInfo.shareRead = sfInfo.shareWrite = 0;
+	sfInfo.modified = sfInfo.created = time(0);
 	sfInfo.uid = uid;
-	info.modified = info.created = time(0);
 	info.fileSize = 0;
 	info.parent = parent;
 	if(!driver->setChunk(cur, tmp, sizeof(tmp)))
@@ -480,6 +479,11 @@ bool XHYFileManager::createBlankFile(cpos_t parent, cpos_t cur, uidsize_t uid)
 
 bool XHYFileManager::addItemToFolder(Folder folder, cpos_t target, const char* name)
 {
+	if(strlen(name) > 15)
+	{
+		setErrno(ERR_NAME_OVERLENGTH);
+		return false;
+	}
 	if(checkHad(folder.nodes, folder.info->nodeSize, name))
 	{
 		setErrno(ERR_NME_CONFLICT);
@@ -547,7 +551,7 @@ bool XHYFileManager::addItemToFolder(Folder folder, cpos_t target, const char* n
 			capdFN = tapdFN->next;
 		}
 	}
-	folder.info->modified = time(0);
+	folder.sfInfo->modified = time(0);
 	return true;
 }
 
@@ -671,7 +675,6 @@ void XHYFileManager::setErrno(int err)
 
 int XHYFileManager::getErrno()
 {
-	std::lock_guard<std::mutex> lck(mtx);
 	return _errno[std::this_thread::get_id()];
 }
 
@@ -679,6 +682,14 @@ inline void XHYFileManager::releaseFd(FDSInfo& info)
 {
 	_fdsmap.erase(_fdsmap.find(info.sfd));
 	FDMInfo &mInfo = _fdmmap[info.tfd];
+	if(info.model & OPTYPE_WTE_MTX_LOCK)
+		mInfo.sfInfo.sign &= ~FL_WRITE_MTXLOCK;
+	else if(info.model & OPTYPE_WTE_SHR_LOCK)
+		--mInfo.sfInfo.shareWrite;
+	else if(info.model & OPTYPE_RAD_MTX_LOCK)
+		--mInfo.sfInfo.mutexRead;
+	else if(info.model & OPTYPE_RAD_SHR_LOCK)
+		--mInfo.sfInfo.shareRead;
 	if(--mInfo.openCount == 0)
 	{
 		flushHandler(mInfo);
@@ -689,14 +700,6 @@ inline void XHYFileManager::releaseFd(FDSInfo& info)
 	}
 	else
 	{
-		if(info.model & OPTYPE_WTE_MTX_LOCK)
-			mInfo.sfInfo.sign &= ~FL_WRITE_MTXLOCK;
-		else if(info.model & OPTYPE_WTE_SHR_LOCK)
-			--mInfo.sfInfo.shareWrite;
-		else if(info.model & OPTYPE_RAD_MTX_LOCK)
-			--mInfo.sfInfo.mutexRead;
-		else if(info.model & OPTYPE_RAD_SHR_LOCK)
-			--mInfo.sfInfo.shareRead;
 		if(info.model & OPTYPE_WRITE)
 			flushHandler(mInfo, time(0));
 		else
@@ -711,13 +714,11 @@ inline void XHYFileManager::flushHandler(FDMInfo& info)
 
 inline void XHYFileManager::flushHandler(FDMInfo& info, time_t modified)
 {
-	char *tmp = new char[sizeof(SafeInfo) + sizeof(INInfo)];
-	driver->getChunk(info.hdpos, tmp, sizeof(SafeInfo) + sizeof(INInfo));
+	char *tmp = new char[sizeof(SafeInfo)];
+	driver->getChunk(info.hdpos, tmp, sizeof(SafeInfo));
 	SafeInfo* psi = (SafeInfo*) tmp;
-	INInfo* pini = (INInfo*) (tmp + sizeof(SafeInfo));
-	*psi = info.sfInfo;
-	pini->modified = modified;
-	driver->setChunk(info.hdpos, tmp, sizeof(SafeInfo) + sizeof(INInfo));
+	psi->modified = modified;
+	driver->setChunk(info.hdpos, tmp, sizeof(SafeInfo));
 }
 
 int XHYFileManager::getFreeMFd()
@@ -838,6 +839,9 @@ bool XHYFileManager::appendFile(FDMInfo& mInfo, size_t len)
 			if(mInfo.fileSize + sizeof(SafeInfo) + sizeof(INInfo) + len <= chunkSize)
 			{
 				mInfo.fileSize += len;
+				IndexNode inode = loadINode(mInfo.hdpos, 0);
+				inode.info->fileSize = mInfo.fileSize;
+				flush();
 				return true;
 			}
 			else
@@ -943,6 +947,9 @@ bool XHYFileManager::appendFile(FDMInfo& mInfo, size_t len)
 		}
 		flush();
 	}
+	IndexNode inode = loadINode(mInfo.hdpos, 0);
+	inode.info->fileSize = mInfo.fileSize;
+	flush();
 	CKInfo* oldlist = mInfo.cklist;
 	mInfo.cklist = new CKInfo[mInfo.cklistSize + apVec.size()];
 	memcpy(mInfo.cklist, oldlist, sizeof(CKInfo) * mInfo.cklistSize);
@@ -1032,6 +1039,7 @@ void XHYFileManager::_seek(FDMInfo& mInfo, FDSInfo& info, int offset, FPos pos)
 			info.ckpos = 0;
 			info.rlpos = mInfo.fileSize;
 			info.abpos = mInfo.fileSize;
+			_seek(mInfo, info, offset, XHYFileManager::cur);
 			return;
 		}
 		info.ckpos = mInfo.cklistSize - 1;

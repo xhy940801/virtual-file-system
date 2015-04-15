@@ -6,32 +6,13 @@
 #include "DiskDriver.h"
 #include "ChunkHelper.h"
 #include "functions.h"
+#include "commondef.h"
 
 #include <thread>
 #include <mutex>
 #include <map>
 #include <list>
 #include <vector>
-
-#define ERR_FLOCKED 1000
-#define ERR_FLODER_NOTEPT 1001
-#define ERR_PATH_NOTEXT 1002
-#define ERR_CN_DEL_ROOT 1003
-#define ERR_SYS_LOADFAIL 1004
-#define ERR_SYS_SAVEFAIL 1005
-#define ERR_MEM_FULL 1006
-#define ERR_NME_CONFLICT 1007
-#define ERR_PATH_IS_NOT_FLODER 1008
-#define ERR_PATH_IS_NOT_FILE 1009
-#define ERR_PMS_DENY 1010
-#define ERR_EOF 1011
-
-#define OPTYPE_READ 0x01
-#define OPTYPE_WRITE 0x02
-#define OPTYPE_WTE_MTX_LOCK 0x10
-#define OPTYPE_WTE_SHR_LOCK 0x20
-#define OPTYPE_RAD_MTX_LOCK 0x40
-#define OPTYPE_RAD_SHR_LOCK 0x80
 
 class XHYFileManager
 {
@@ -51,7 +32,7 @@ private:
 	int _cmfd, _csfd;
 	DiskDriver* driver;
 	const size_t chunkSize;
-	std::mutex mtx;
+	std::recursive_mutex mtx;
 	FSHeader header;
 	BufHandler bufHandlers[HANDLERSIZE];
 	std::map<std::thread::id, int> _errno;
@@ -125,8 +106,14 @@ public:
 	int read(int fd, void* buf, size_t len);
 	int write(int fd, const void* buf, size_t len);
 
-	size_t tell(int fd);
-	size_t seek(int fd, int offset, FPos pos);
+	int tell(int fd);
+	int seek(int fd, int offset, FPos pos);
+
+	template <typename CheckPms>
+	bool changeSafeInfo(const char* path, SafeInfo* newInfo, CheckPms pms);
+
+	void lock() { mtx.lock(); }
+	void unlock() { mtx.unlock(); }
 };
 
 template <typename CheckPmsS>
@@ -178,7 +165,7 @@ bool XHYFileManager::delItem(cpos_t cur, CheckPmsS pms)
 template <typename CheckPmsP, typename CheckPmsS>
 bool XHYFileManager::deleteItem(const char* path, CheckPmsP pmsp, CheckPmsS pmss)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if(path[0] != '/')
 	{
 		setErrno(ERR_PATH_NOTEXT);
@@ -306,7 +293,7 @@ bool XHYFileManager::deleteItem(const char* path, CheckPmsP pmsp, CheckPmsS pmss
 template <typename CheckPms>
 int XHYFileManager::open(const char* path, fdtype_t type, CheckPms pms)
 {
-	std::lock_guard<std::mutex> lck (mtx);
+	std::lock_guard<std::recursive_mutex> lck(mtx);
 	if((type & OPTYPE_READ) && !(type & OPTYPE_RAD_SHR_LOCK))
 		type |= OPTYPE_RAD_MTX_LOCK;
 	if((type & OPTYPE_WRITE) && !(type & OPTYPE_WTE_SHR_LOCK))
@@ -335,7 +322,7 @@ int XHYFileManager::open(const char* path, fdtype_t type, CheckPms pms)
 			setErrno(ERR_PATH_IS_NOT_FILE);
 			return 0;
 		}
-		int err = pms(inode.sfInfo);
+		int err = pms(inode.sfInfo, type);
 		if(err != 0)
 		{
 			setErrno(err);
@@ -394,6 +381,33 @@ int XHYFileManager::open(const char* path, fdtype_t type, CheckPms pms)
 	_fdsmap[sinfo.sfd] = (--_thmap[std::this_thread::get_id()].end());
 	flushHandler(_fdmmap[rsfd]);
 	return sinfo.sfd;
+}
+
+template <typename CheckPms>
+bool XHYFileManager::changeSafeInfo(const char* path, SafeInfo* newInfo, CheckPms pms)
+{
+	std::lock_guard<std::recursive_mutex> lck(mtx);
+	size_t len = strlen(path);
+	if(path[0] != '/')
+	{
+		setErrno(ERR_PATH_NOTEXT);
+		return 0;
+	}
+	cpos_t cur = loadPath(path, len);
+	if(!load(cur, 0))
+		return false;
+	SafeInfo* sfInfo = (SafeInfo*) bufHandlers[0].buf;
+	int err = pms(sfInfo);
+	if(err != 0)
+	{
+		setErrno(err);
+		return false;
+	}
+	xswap(sfInfo->sign, newInfo->sign);
+	sfInfo->sign &= ~(FL_WRITE_MTXLOCK | FL_TYPE_FILE);
+	sfInfo->sign |= newInfo->sign & (FL_WRITE_MTXLOCK | FL_TYPE_FILE);
+	flush();
+	return true;
 }
 
 #endif
