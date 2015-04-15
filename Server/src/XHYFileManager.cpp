@@ -443,11 +443,11 @@ bool XHYFileManager::createBlankFolder(cpos_t parent, cpos_t cur, uidsize_t uid)
 	char tmp[sizeof(FloderInfo) + sizeof(SafeInfo)];
 	SafeInfo &sfInfo = * (SafeInfo*) tmp;
 	FloderInfo &info = * (FloderInfo*) (tmp + sizeof(SafeInfo));
-	sfInfo.sign = PM_U_READ | PM_U_WRITE;
+	sfInfo.sign = PM_U_READ | PM_U_WRITE | PM_O_READ | PM_O_WRITE;
 	sfInfo.mutexRead = sfInfo.shareRead = sfInfo.shareWrite = 0;
+	sfInfo.modified = sfInfo.created = time(0);
 	sfInfo.uid = uid;
 	info.nodeSize = 0;
-	info.modified = info.created = time(0);
 	info.parent = parent;
 	info.next = 0;
 	if(!driver->setChunk(cur, tmp, sizeof(tmp)))
@@ -465,8 +465,8 @@ bool XHYFileManager::createBlankFile(cpos_t parent, cpos_t cur, uidsize_t uid)
 	INInfo &info = * (INInfo*) (tmp + sizeof(SafeInfo));
 	sfInfo.sign = PM_U_READ | PM_U_WRITE | FL_TYPE_FILE;
 	sfInfo.mutexRead = sfInfo.shareRead = sfInfo.shareWrite = 0;
+	sfInfo.modified = sfInfo.created = time(0);
 	sfInfo.uid = uid;
-	info.modified = info.created = time(0);
 	info.fileSize = 0;
 	info.parent = parent;
 	if(!driver->setChunk(cur, tmp, sizeof(tmp)))
@@ -551,7 +551,7 @@ bool XHYFileManager::addItemToFolder(Folder folder, cpos_t target, const char* n
 			capdFN = tapdFN->next;
 		}
 	}
-	folder.info->modified = time(0);
+	folder.sfInfo->modified = time(0);
 	return true;
 }
 
@@ -682,6 +682,14 @@ inline void XHYFileManager::releaseFd(FDSInfo& info)
 {
 	_fdsmap.erase(_fdsmap.find(info.sfd));
 	FDMInfo &mInfo = _fdmmap[info.tfd];
+	if(info.model & OPTYPE_WTE_MTX_LOCK)
+		mInfo.sfInfo.sign &= ~FL_WRITE_MTXLOCK;
+	else if(info.model & OPTYPE_WTE_SHR_LOCK)
+		--mInfo.sfInfo.shareWrite;
+	else if(info.model & OPTYPE_RAD_MTX_LOCK)
+		--mInfo.sfInfo.mutexRead;
+	else if(info.model & OPTYPE_RAD_SHR_LOCK)
+		--mInfo.sfInfo.shareRead;
 	if(--mInfo.openCount == 0)
 	{
 		flushHandler(mInfo);
@@ -692,14 +700,6 @@ inline void XHYFileManager::releaseFd(FDSInfo& info)
 	}
 	else
 	{
-		if(info.model & OPTYPE_WTE_MTX_LOCK)
-			mInfo.sfInfo.sign &= ~FL_WRITE_MTXLOCK;
-		else if(info.model & OPTYPE_WTE_SHR_LOCK)
-			--mInfo.sfInfo.shareWrite;
-		else if(info.model & OPTYPE_RAD_MTX_LOCK)
-			--mInfo.sfInfo.mutexRead;
-		else if(info.model & OPTYPE_RAD_SHR_LOCK)
-			--mInfo.sfInfo.shareRead;
 		if(info.model & OPTYPE_WRITE)
 			flushHandler(mInfo, time(0));
 		else
@@ -714,13 +714,11 @@ inline void XHYFileManager::flushHandler(FDMInfo& info)
 
 inline void XHYFileManager::flushHandler(FDMInfo& info, time_t modified)
 {
-	char *tmp = new char[sizeof(SafeInfo) + sizeof(INInfo)];
-	driver->getChunk(info.hdpos, tmp, sizeof(SafeInfo) + sizeof(INInfo));
+	char *tmp = new char[sizeof(SafeInfo)];
+	driver->getChunk(info.hdpos, tmp, sizeof(SafeInfo));
 	SafeInfo* psi = (SafeInfo*) tmp;
-	INInfo* pini = (INInfo*) (tmp + sizeof(SafeInfo));
-	*psi = info.sfInfo;
-	pini->modified = modified;
-	driver->setChunk(info.hdpos, tmp, sizeof(SafeInfo) + sizeof(INInfo));
+	psi->modified = modified;
+	driver->setChunk(info.hdpos, tmp, sizeof(SafeInfo));
 }
 
 int XHYFileManager::getFreeMFd()
@@ -841,6 +839,9 @@ bool XHYFileManager::appendFile(FDMInfo& mInfo, size_t len)
 			if(mInfo.fileSize + sizeof(SafeInfo) + sizeof(INInfo) + len <= chunkSize)
 			{
 				mInfo.fileSize += len;
+				IndexNode inode = loadINode(mInfo.hdpos, 0);
+				inode.info->fileSize = mInfo.fileSize;
+				flush();
 				return true;
 			}
 			else
@@ -946,6 +947,9 @@ bool XHYFileManager::appendFile(FDMInfo& mInfo, size_t len)
 		}
 		flush();
 	}
+	IndexNode inode = loadINode(mInfo.hdpos, 0);
+	inode.info->fileSize = mInfo.fileSize;
+	flush();
 	CKInfo* oldlist = mInfo.cklist;
 	mInfo.cklist = new CKInfo[mInfo.cklistSize + apVec.size()];
 	memcpy(mInfo.cklist, oldlist, sizeof(CKInfo) * mInfo.cklistSize);
@@ -1035,6 +1039,7 @@ void XHYFileManager::_seek(FDMInfo& mInfo, FDSInfo& info, int offset, FPos pos)
 			info.ckpos = 0;
 			info.rlpos = mInfo.fileSize;
 			info.abpos = mInfo.fileSize;
+			_seek(mInfo, info, offset, XHYFileManager::cur);
 			return;
 		}
 		info.ckpos = mInfo.cklistSize - 1;

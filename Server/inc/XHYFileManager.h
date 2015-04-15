@@ -6,33 +6,13 @@
 #include "DiskDriver.h"
 #include "ChunkHelper.h"
 #include "functions.h"
+#include "commondef.h"
 
 #include <thread>
 #include <mutex>
 #include <map>
 #include <list>
 #include <vector>
-
-#define ERR_FLOCKED 1000
-#define ERR_FLODER_NOTEPT 1001
-#define ERR_PATH_NOTEXT 1002
-#define ERR_CN_DEL_ROOT 1003
-#define ERR_SYS_LOADFAIL 1004
-#define ERR_SYS_SAVEFAIL 1005
-#define ERR_MEM_FULL 1006
-#define ERR_NME_CONFLICT 1007
-#define ERR_PATH_IS_NOT_FLODER 1008
-#define ERR_PATH_IS_NOT_FILE 1009
-#define ERR_PMS_DENY 1010
-#define ERR_EOF 1011
-#define ERR_NAME_OVERLENGTH 1012
-
-#define OPTYPE_READ 0x01
-#define OPTYPE_WRITE 0x02
-#define OPTYPE_WTE_MTX_LOCK 0x10
-#define OPTYPE_WTE_SHR_LOCK 0x20
-#define OPTYPE_RAD_MTX_LOCK 0x40
-#define OPTYPE_RAD_SHR_LOCK 0x80
 
 class XHYFileManager
 {
@@ -424,7 +404,6 @@ bool XHYFileManager::changeSafeInfo(const char* path, SafeInfo* newInfo, CheckPm
 		return false;
 	}
 	xswap(sfInfo->sign, newInfo->sign);
-	xswap(sfInfo->uid, newInfo->uid);
 	sfInfo->sign &= ~(FL_WRITE_MTXLOCK | FL_TYPE_FILE);
 	sfInfo->sign |= newInfo->sign & (FL_WRITE_MTXLOCK | FL_TYPE_FILE);
 	flush();

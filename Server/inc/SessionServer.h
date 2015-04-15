@@ -3,8 +3,9 @@
 
 #include "types.h"
 #include "XHYFileManager.h"
+#include "serrordef.h"
 
-class Session
+class SessionServer
 {
 	enum Status {NLOGIN, LOOPING, EXIT, ERROR};
 private:
@@ -33,8 +34,8 @@ private:
 private:
 	bool validHeader();
 	void createFile();
-	void createFloder();
-	void readFloder();
+	void createFolder();
+	void readFolder();
 	void changeModel();
 	void openFile();
 	void readFile();
@@ -44,19 +45,20 @@ private:
 	void closeFile();
 	void deleteItem();
 	void getItemSafeInfo();
-	void formatDisk();
+	//void formatDisk();
 	void logout();
 	void cmdError();
 	void addUsr();
 	void changePsd();
 private:
 	uidsize_t validAuth(char* username, char* password);
+	bool addableUser(char* username);
 	int pathValidateR(char* path, bool type, SafeInfo* sfInfo);
 	int pathValidateW(char* path, bool type, SafeInfo* sfInfo);
 public:
-	Session(XHYFileManager* mgr, int sock);
+	SessionServer(XHYFileManager* mgr, int sock);
 	void run();
-	~Session();
+	~SessionServer();
 };
 
 #endif

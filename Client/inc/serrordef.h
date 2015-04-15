@@ -11,4 +11,6 @@
 #define ERR_USER_HAS_EXISTED 107
 #define ERR_UNAME_OR_PSD_ERROR 108
 
+#define ERR_SOCKET_CLOSED 110
+
 #endif
