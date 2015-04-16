@@ -24,7 +24,7 @@ public:
 	SessionClient(int sock);
 	~SessionClient();
 
- 	bool login(const char* username, const char* password);
+ 	int login(const char* username, const char* password);
 	bool createFile(const char* path, const char* name);
 	bool createFolder(const char* path, const char* name);
 	bool readFolder(const char* path, std::vector<std::string>& fileList);

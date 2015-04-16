@@ -67,7 +67,9 @@ void SessionServer::rlogin()
 	}
 	else
 		rrs = err;
-	write(socket, &rrs, sizeof(rrs));
+	writeSBuf((char*) &uid, sizeof(uid));
+	if(rrs != 0)
+		write(socket, &rrs, sizeof(rrs));
 }
 
 void SessionServer::rloop()
