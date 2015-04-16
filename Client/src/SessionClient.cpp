@@ -19,6 +19,7 @@ SessionClient::SessionClient(int sock)
 
 SessionClient::~SessionClient()
 {
+	close(socket);
 }
 
 bool SessionClient::readSBuf(char* buf, size_t len)
@@ -84,10 +85,10 @@ bool SessionClient::sendValidHead()
 	return true;
 }
 
-bool SessionClient::login(const char* username, const char* password)
+int SessionClient::login(const char* username, const char* password)
 {
 	if(!sendValidHead())
-		return false;
+		return 0;
 	char tun[_MAXUNAMESIZE];
 	char tpd[_MAXPSDSIZE];
 
@@ -97,32 +98,35 @@ bool SessionClient::login(const char* username, const char* password)
 	if(strlen(username) > 31)
 	{
 		setErr(ERR_UNAME_OVERLENGTH);
-		return false;
+		return 0;
 	}
 
 	if(strlen(password) > 31)
 	{
 		setErr(ERR_PSD_OVERLENGTH);
-		return false;
+		return 0;
 	}
 
 	strcpy(tun, tpd);
 	strcpy(tpd, password);
 
 	if(!writeSBuf(username, _MAXUNAMESIZE))
-		return false;
+		return 0;
 	if(!writeSBuf(password, _MAXPSDSIZE))
-		return false;
+		return 0;
 
-	int rs;
+	uidsize_t rs;
 	if(!readSBuf((char*) &rs, sizeof(rs)))
-		return false;
-	if(rs != 0)
+		return 0;
+	if(rs == 0)
 	{
-		setErr(rs);
-		return false;
+		int rss;
+		if(!readSBuf((char*) &rss, sizeof(rss)))
+			return 0;
+		setErr(rss);
+		return 0;
 	}
-	return true;
+	return rs;
 }
 
 bool SessionClient::createFile(const char* path, const char* name)

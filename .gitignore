@@ -1,7 +1,8 @@
-dep/*.d
-obj/*.o
-bin/*
-lib/*
+*/dep/*.d
+*/obj/*.o
+*/bin/*
+*/lib/*
 *.test.*
 *.conf
 *.os
+!empty

@@ -707,12 +707,12 @@ inline void XHYFileManager::releaseFd(FDSInfo& info)
 	}
 }
 
-inline void XHYFileManager::flushHandler(FDMInfo& info)
+void XHYFileManager::flushHandler(FDMInfo& info)
 {
 	driver->setChunk(info.hdpos, &info.sfInfo, sizeof(info.sfInfo));
 }
 
-inline void XHYFileManager::flushHandler(FDMInfo& info, time_t modified)
+void XHYFileManager::flushHandler(FDMInfo& info, time_t modified)
 {
 	char *tmp = new char[sizeof(SafeInfo)];
 	driver->getChunk(info.hdpos, tmp, sizeof(SafeInfo));
