@@ -1,19 +1,26 @@
 #include "Shell.h"
-#include <Guard.h>
+#include "Guard.h"
+#include "commondef.h"
+#include "SandBox.h"
+#include "functions.h"
 
 #include <vector>
 #include <memory>
+#include <iostream>
 
-Shell::Shell(SessionClient* _sn)
+#include <cstdio>
+
+Shell::Shell(SessionClient* _sn, uidsize_t _uid)
 	: session(_sn), uid(_uid)
 {
+	basePath = "/";
 }
 
 Shell::~Shell()
 {
 }
 
-void Shell::select(const std::string& exec, size_t argc, const std::vector<std::string>& args)
+void Shell::select(const std::string& exec, size_t argc, const std::string* argv)
 {
 	if(exec == "open")
 		open(argc, argv);
@@ -25,6 +32,8 @@ void Shell::select(const std::string& exec, size_t argc, const std::vector<std::
 		write(argc, argv);
 	else if(exec == "read")
 		read(argc, argv);
+	else if(exec == "close")
+		close(argc, argv);
 	else if(exec == "useradd")
 		useradd(argc, argv);
 	else if(exec == "chpsd")
@@ -65,10 +74,10 @@ void Shell::parse(std::string cmd)
 				++end;
 			else if(cmd[end] == '\"')
 			{
-				args.push_back(decode(trim(cmd.substr(start, end))));
+				args.push_back(decode(trim(cmd.substr(start, end - start))));
 				++end;
 				start = end;
-				model == false;
+				model = false;
 			}
 		}
 		else
@@ -76,8 +85,8 @@ void Shell::parse(std::string cmd)
 			if(cmd[end] == ' ' || cmd[end] == '\t')
 			{
 				if(cmd[start] != ' ' && cmd[start] != '\t')
-					args.push_back(decode(trim(cmd.substr(start, end))));
-				start = end;
+					args.push_back(decode(trim(cmd.substr(start, end - start))));
+				start = end + 1;
 			}
 			else if(cmd[end] == '\"')
 			{
@@ -104,12 +113,11 @@ void Shell::open(size_t argc, const std::string* argv)
 		printError(ERR_ARGS_INVALID);
 		return;
 	}
-	std::string
-	fdtype_t type;
+	fdtype_t type = 0;
 	//根据参数填写打开的方式type
-	for(size_t i = 1; i < argc, ++i)
+	for(size_t i = 1; i < argc; ++i)
 	{
-		std::string& arg = argv[i];
+		const std::string& arg = argv[i];
 		if(arg == "-r")								//读的方式打开
 			type |= OPTYPE_READ;
 		else if(arg == "-w")						//写的方式打开
@@ -123,12 +131,12 @@ void Shell::open(size_t argc, const std::string* argv)
 		else if(arg == "-lmw")						//加上写互斥锁
 			type |= OPTYPE_WTE_MTX_LOCK;
 		else if(arg == "-lsw")						//加上写共享锁
-			type |= OPTYPE_WTE_SHR_LOCK
+			type |= OPTYPE_WTE_SHR_LOCK;
 	}
 
 	if(!(type & OPTYPE_READ) | (type & OPTYPE_WRITE))
 		type |= OPTYPE_WRITE | OPTYPE_READ;
-	int fd = session->open(absPath(argv[0]).c_str(), type);
+	int fd = session->openFile(absPath(argv[0]).c_str(), type);
 	if(fd == 0)
 		printError(session->getErrno());
 	else
@@ -160,9 +168,9 @@ void Shell::seek(size_t argc, const std::string* argv)
 	bool pod = false;
 	char pos = 'c';
 	//解析参数
-	for(size_t i = 2; i < argc, ++i)
+	for(size_t i = 2; i < argc; ++i)
 	{
-		std::string& arg = argv[i];
+		const std::string& arg = argv[i];
 		if(arg == "-c")								//以当前位置为偏移点
 			pos = 'c';
 		else if(arg == "-e")						//以文件结束位置为起点
@@ -205,7 +213,7 @@ void Shell::tell(size_t argc, const std::string* argv)
 		printError(session->getErrno());
 		return;
 	}
-	if(pod)
+	if(fpos)
 		std::cout << "The pos is " << fpos << std::endl;
 }
 
@@ -226,9 +234,9 @@ void Shell::write(size_t argc, const std::string* argv)
 	}
 	enum Types {STRING, INT8, INT16, INT32, INT64};
 	Types type = Types::STRING;
-	for(size_t i = 2; i < argc, ++i)
+	for(size_t i = 2; i < argc; ++i)
 	{
-		std::string& arg = argv[i];
+		const std::string& arg = argv[i];
 		if(arg == "-s")								//以文字模式插入
 			type = Types::STRING;
 		else if(arg == "-i8")						//以int8模式插入
@@ -261,7 +269,7 @@ void Shell::write(size_t argc, const std::string* argv)
 	switch (type)
 	{
 	case Types::STRING:
-		result = session->writeFile(fd, argv[1], argv[1].size());
+		result = session->writeFile(fd, argv[1].c_str(), argv[1].size());
 		break;
 	case Types::INT8:
 		result = session->writeFile(fd, (char*) &n8, sizeof(n8));
@@ -282,7 +290,7 @@ void Shell::write(size_t argc, const std::string* argv)
 		printError(session->getErrno());
 		return;
 	}
-	std::cout << "write " << result << "bytes" << std::endl;
+	std::cout << "write " << result << " bytes" << std::endl;
 }
 
 void Shell::read(size_t argc, const std::string* argv)
@@ -308,9 +316,9 @@ void Shell::read(size_t argc, const std::string* argv)
 	}
 	enum Types {STRING, INT8, INT16, INT32, INT64};
 	Types type = Types::STRING;
-	for(size_t i = 2; i < argc, ++i)
+	for(size_t i = 2; i < argc; ++i)
 	{
-		std::string& arg = argv[i];
+		const std::string& arg = argv[i];
 		if(arg == "-s")								//以文字模式插入
 			type = Types::STRING;
 		else if(arg == "-i8")						//以int8模式插入
@@ -324,7 +332,7 @@ void Shell::read(size_t argc, const std::string* argv)
 	}
 	int result;
 	std::unique_ptr<char> buf(new char[len + 1]);
-	result = session->readFile(fd, buf, len);
+	result = session->readFile(fd, buf.get(), len);
 	if(result < 0)
 	{
 		printError(session->getErrno());
@@ -363,7 +371,28 @@ void Shell::read(size_t argc, const std::string* argv)
 			break;
 		}
 	}
-	std::cout << "read " << result << "bytes" << std::endl;
+	std::cout << "read " << result << " bytes" << std::endl;
+}
+
+void Shell::close(size_t argc, const std::string* argv)
+{
+	if(argc < 1)
+	{
+		printError(ERR_ARGS_INVALID);
+		return;
+	}
+	bool parseSuc;
+	//获取文件描述符
+	int fd = parseInt(argv[0], parseSuc);
+	if(!parseSuc)
+	{
+		printError(ERR_ARGS_INVALID);
+		return;
+	}
+
+	bool rs = session->closeFile(fd);		//调用closeFile
+	if(!rs)
+		printError(session->getErrno());
 }
 
 void Shell::useradd(size_t argc, const std::string* argv)
@@ -408,7 +437,10 @@ void Shell::mkdir(size_t argc, const std::string* argv)
 	std::string abspth, parent, name;
 	abspth = absPath(argv[0]);
 	parent = parentPath(abspth);
-	name = abspth.substr(parent.size(), abspth.size());
+	if(parent == "/")
+		name = abspth.substr(1, abspth.size() - 1);
+	else
+		name = abspth.substr(parent.size() + 1, abspth.size() - (parent.size() + 1));
 	if(parent == "" || name == "")
 	{
 		printError(ERR_ARGS_INVALID);
@@ -428,7 +460,10 @@ void Shell::mkfile(size_t argc, const std::string* argv)
 	std::string abspth, parent, name;
 	abspth = absPath(argv[0]);
 	parent = parentPath(abspth);
-	name = abspth.substr(parent.size(), abspth.size());
+	if(parent == "/")
+		name = abspth.substr(1, abspth.size() - 1);
+	else
+		name = abspth.substr(parent.size() + 1, abspth.size() - (parent.size() + 1));
 	if(parent == "" || name == "")
 	{
 		printError(ERR_ARGS_INVALID);
@@ -445,7 +480,7 @@ void Shell::rm(size_t argc, const std::string* argv)
 		printError(ERR_ARGS_INVALID);
 		return;
 	}
-	if(!session->deleteItem(absPath(argv[0])))
+	if(!session->deleteItem(absPath(argv[0]).c_str()))
 		printError(session->getErrno());
 }
 
@@ -496,20 +531,20 @@ void Shell::cat(size_t argc, const std::string* argv)
 
 void Shell::ls(size_t argc, const std::string* argv)
 {
+	std::string path;
 	if(argc < 1)
-	{
-		printError(ERR_ARGS_INVALID);
-		return;
-	}
+		path = basePath;
+	else
+		path = absPath(argv[0]);
 	std::vector<std::string> files;
-	if(!readFolder(absPath(argv[0]).c_str(), files))
+	if(!session->readFolder(path.c_str(), files))
 	{
 		printError(session->getErrno());
 		return;
 	}
 	if (files.size() == 0)
 	{
-		std::cout << "-------empty folder-------" << endl;
+		std::cout << "-------empty folder-------";
 	}
 	for(size_t i = 0; i < files.size(); ++i)
 		std::cout << files[i] << "\t\t";
@@ -523,9 +558,9 @@ void Shell::chmod(size_t argc, const std::string* argv)
 		printError(ERR_ARGS_INVALID);
 		return;
 	}
-	int parseSuc
-	int mod = parseInt(argv[1]);
-	if(!parseSuc || mod / 10 > 7 || mode % 10 > 7)
+	bool parseSuc;
+	int mod = parseInt(argv[1], parseSuc);
+	if(!parseSuc || mod / 10 > 7 || mod % 10 > 7)
 	{
 		printError(ERR_ARGS_INVALID);
 		return;
@@ -545,10 +580,14 @@ void Shell::see(size_t argc, const std::string* argv)
 	SafeInfo sfInfo;
 	if(!session->getItemSafeInfo(absPath(argv[0]).c_str(), &sfInfo))
 		printError(session->getErrno());
-	std::cout << "mode:\t\t" << sfInfo.sfInfo % 8 << (sfInfo.sfInfo / 8) % 8;
-	std::cout << "owner:\t\t" << sfInfo.uid;
-	std::cout << "created:\t" << sfInfo.created;
-	std::cout << "modified:\t" << sfInfo.modified;
+	if(sfInfo.sign & FL_TYPE_FILE)
+		std::cout << "file:\t" << absPath(argv[0]);
+	else
+		std::cout << "folder:\t" << absPath(argv[0]);
+	std::cout << "\tmode:\t" << sfInfo.sign % 8 << (sfInfo.sign / 8) % 8;
+	std::cout << "\towner:\t" << sfInfo.uid;
+	std::cout << "\tcreated:\t" << sfInfo.created;
+	std::cout << "\tmodified:\t" << sfInfo.modified;
 	std::cout << std::endl;
 }
 
@@ -565,7 +604,7 @@ void Shell::ocp(size_t argc, const std::string* argv)
 	class _OFDGuard
 	{
 	public:
-		void operator () (FILE* fd) { close(fd); }
+		void operator () (FILE* fd) { fclose(fd); }
 	};
 	if(argc < 2)
 	{
@@ -576,11 +615,14 @@ void Shell::ocp(size_t argc, const std::string* argv)
 	FILE* ofd = fopen(argv[0].c_str(), "r");
 	if(ofd == nullptr)
 		printError(ERR_OFILE_OPEN_FAIL);
-	Guard<FILE*, _OFDGuard> ogd(ofd, _OFDGuard);
+	Guard<FILE*, _OFDGuard> ogd(ofd, _OFDGuard());
 	std::string abspth, parent, name;
-	abspth = absPath(argv[0]);
+	abspth = absPath(argv[1]);
 	parent = parentPath(abspth);
-	name = abspth.substr(parent.size(), abspth.size());
+	if(parent == "/")
+		name = abspth.substr(1, abspth.size() - 1);
+	else
+		name = abspth.substr(parent.size() + 1, abspth.size() - (parent.size() + 1));
 	if(parent == "" || name == "")
 	{
 		printError(ERR_ARGS_INVALID);
@@ -600,7 +642,7 @@ void Shell::ocp(size_t argc, const std::string* argv)
 	std::unique_ptr<char> buf(new char[BUFSIZE]);
 	while(true)
 	{
-		int len = fread(ofd, buf.get(), BUFSIZE);
+		int len = fread(buf.get() + start, sizeof(char), BUFSIZE - start, ofd);
 		if(len < 0)
 		{
 			printError(ERR_OFILE_READ_FAIL);
@@ -610,6 +652,7 @@ void Shell::ocp(size_t argc, const std::string* argv)
 			break;
 		else
 		{
+			start += len;
 			int has = 0;
 			while(has != len)
 			{
@@ -644,13 +687,13 @@ void Shell::runshell(size_t argc, const std::string* argv)
 	SafeInfo sfInfo;
 	if(!session->getItemSafeInfo(evrPath(argv[0]).c_str(), &sfInfo))
 		printError(session->getErrno());
-	if(sfInfo.uid == uid && !(sfInfo.sign & PM_U_EXECUTE) || sfInfo.uid != uid && !(sfInfo.sign & PM_O_EXECUTE))
+	if((sfInfo.uid == uid && !(sfInfo.sign & PM_U_EXECUTE)) || (sfInfo.uid != uid && !(sfInfo.sign & PM_O_EXECUTE)))
 	{
 		printError(ERR_FILE_COULD_NOT_EXEC);
 		return;
 	}
 
-	string sh;
+	std::string sh;
 
 	if(argc < 1)
 	{
@@ -692,53 +735,6 @@ void Shell::runshell(size_t argc, const std::string* argv)
 	sd.run(sh, argc - 1, argv + 1);
 }
 
-std::string Shell::trim(std::string str)
-{
-	size_t start = 0, end = str.size();
-	while(start < str.size())
-	{
-		char c = str[start];
-		if(c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\a' || c == '\b' || c == '\v' || c == '\f' || c == '\0')
-			++start;
-		else
-			break;
-	}
-	while(end > 0)
-	{
-		char c = str[end - 1];
-		if(c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\a' || c == '\b' || c == '\v' || c == '\f' || c == '\0')
-			--end;
-		else
-			break;
-	}
-	if(start < end)
-		return str.substr(start, end);
-	return std::string("");
-}
-
-int64_t Shell::parseInt(std::string str, bool& validate)
-{
-	str = trim(str);
-	if(str.size() == 0)
-	{
-		validate = false;
-		return 0;
-	}
-	int64_t rs = 0;
-	for(size_t i = 0; i < str.size(), ++i)
-	{
-		if(str[i] < '0' || str[i] > '9')
-		{
-			validate = false;
-			return 0;
-		}
-		rs *= 10;
-		rs += str[i] - '0';
-	}
-	validate = true;
-	return rs;
-}
-
 void Shell::printError(int err)
 {
 	std::cout << "error code: " << err << std::endl;
@@ -750,45 +746,45 @@ std::string Shell::absPath(std::string path)
 		return "";
 	std::string tpath;
 	size_t start = 0, end = 0;
+	if(path == "..")
+	{
+		tpath = parentPath(basePath);
+		return tpath;
+	}
+	if(path == ".")
+		return basePath;
+	if(path == "/")
+		return "/";
 	if(path[0] == '/')
 	{
 		start = 1;
-		tpath = '/';
+		tpath = "";
 	}
+	else if(basePath == "/")
+		tpath = "";
 	else
 		tpath = basePath;
 	for(end = start; end < path.size(); ++end)
 	{
-		if(start == end)
-			tpath = "/";
 		if(path[end] == '/')
 		{
+			if(start == end)
+				tpath = "/";
 			if(end - start == 2 && path[start] == '.' && path[start + 1] == '.')
 				tpath = parentPath(tpath);
-			else if(end - start == 1 && path[start] == '.')
-				tpath = parentPath(tpath);
+			else if(end - start == 1 && path[start] == '.');
 			else
 			{
 				tpath += '/';
-				tpath += path.substr(start, end);
+				tpath += path.substr(start, end - start);
 			}
-			++end;
-			start = end;
+			start = end + 1;
 		}
 	}
-	if(start == end)
-		tpath = "/";
-	if(path[end] == '/')
+	if(path[path.size() - 1] != '/')
 	{
-		if(end - start == 2 && path[start] == '.' && path[start + 1] == '.')
-			tpath = parentPath(tpath);
-		else if(end - start == 1 && path[start] == '.')
-			tpath = parentPath(tpath);
-		else
-		{
-			tpath += '/';
-			tpath += path.substr(start, end);
-		}
+		tpath += '/';
+		tpath += path.substr(start, path.size() - start);
 	}
 	return tpath;
 }
@@ -800,8 +796,8 @@ std::string Shell::evrPath(std::string path)
 
 std::string Shell::decode(std::string str)
 {
-	if(rs.size() == 0)
-		return rs;
+	if(str.size() == 0)
+		return str;
 	std::string rs;
 	for(size_t i = 0; i + 1 < str.size(); ++i)
 	{
@@ -861,6 +857,21 @@ std::string Shell::parentPath(std::string path)
 {
 	for(size_t i = path.size(); i > 0; --i)
 		if(path[i - 1] == '/')
-			return path.substr(0, i - 1);
+		{
+			std::string tmp = path.substr(0, i - 1);
+			if(tmp == "")
+				tmp = "/";
+			return tmp;
+		}
 	return "";
+}
+
+std::string Shell::getBasePath()
+{
+	return basePath;
+}
+
+uidsize_t Shell::getUid()
+{
+	return uid;
 }

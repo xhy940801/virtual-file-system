@@ -19,6 +19,7 @@ SessionClient::SessionClient(int sock)
 
 SessionClient::~SessionClient()
 {
+	close(socket);
 }
 
 bool SessionClient::readSBuf(char* buf, size_t len)
@@ -121,7 +122,7 @@ int SessionClient::login(const char* username, const char* password)
 	{
 		int rss;
 		if(!readSBuf((char*) &rss, sizeof(rss)))
-			return fd;
+			return 0;
 		setErr(rss);
 		return 0;
 	}
