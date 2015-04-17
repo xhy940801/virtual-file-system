@@ -1,6 +1,6 @@
 #ifndef _GUARD_H
 #define _GUARD_H
-
+//第二个守卫类
 template<typename T, typename OP>
 class Guard
 {

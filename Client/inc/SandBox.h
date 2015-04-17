@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <map>
 #include <vector>
-
+//运行脚本的沙盒,其实这玩意就是一个语法分析+运行器
 class SandBox
 {
 	std::map<std::string, Val> idTable;

@@ -1,6 +1,6 @@
 #ifndef _FILE_GUARD
 #define _FILE_GUARD
-
+//守卫类类似lock_guard
 template <typename MGR, typename FILE>
 class FileGuard
 {

@@ -27,58 +27,58 @@ class XHYFileManager
 	};
 	static const size_t HANDLERSIZE = 4;
 public:
-	enum FPos { beg, cur, end };
+	enum FPos { beg, cur, end }; //文件位置的枚举
 private:
 	int _cmfd, _csfd;
-	DiskDriver* driver;
-	const size_t chunkSize;
-	std::recursive_mutex mtx;
-	FSHeader header;
-	BufHandler bufHandlers[HANDLERSIZE];
-	std::map<std::thread::id, int> _errno;
-	std::map<int, FDMInfo> _fdmmap;
-	std::map<int, std::list<FDSInfo>::iterator> _fdsmap;
-	std::map<cpos_t, int> _cpmap;
-	std::map<std::thread::id, std::list<FDSInfo> > _thmap;
+	DiskDriver* driver;			//虚拟硬盘驱动
+	const size_t chunkSize;		//块大小
+	std::recursive_mutex mtx;	//互斥锁,防止多人同时使用FileManager的操作引起不必要的麻烦
+	FSHeader header;			//超级块信息
+	BufHandler bufHandlers[HANDLERSIZE];	//预先分配的缓存
+	std::map<std::thread::id, int> _errno;	//每个线程独自拥有的错误码,防止多线程情况下获取不到自己的错误信息
+	std::map<int, FDMInfo> _fdmmap;			//整体文件描述符对文件信息的映射
+	std::map<int, std::list<FDSInfo>::iterator> _fdsmap;	//整体文件描述符对局部文件描述符的映射
+	std::map<cpos_t, int> _cpmap;			//文件位置对整体文件描述符的映射
+	std::map<std::thread::id, std::list<FDSInfo> > _thmap;		//线程对自己的局部描述符的映射
 private:
-	bool createFolder(cpos_t parent, const char* name, uidsize_t uid);
-	bool createFile(cpos_t parent, const char* name, uidsize_t uid);
+	bool createFolder(cpos_t parent, const char* name, uidsize_t uid);	//创建文件
+	bool createFile(cpos_t parent, const char* name, uidsize_t uid);	//创建文件夹
 
-	cpos_t getFreeChunk(cksize_t expected, cksize_t& had);
-	void releaseChunk(cpos_t pos, size_t size);
-	void flush();
+	cpos_t getFreeChunk(cksize_t expected, cksize_t& had);				//获取空闲空间,空闲空间的头由函数返回,空闲空间后有多少连续空间空闲
+	void releaseChunk(cpos_t pos, size_t size);							//释放空间
+	void flush();														//把缓存刷入硬盘中
 
-	bool checkHad(FileNode* fn, size_t len, const char* name);
+	bool checkHad(FileNode* fn, size_t len, const char* name);			//检查文件夹内释放有名为name的文件
 
-	bool createBlankFolder(cpos_t parent, cpos_t cur, uidsize_t uid);
-	bool createBlankFile(cpos_t parent, cpos_t cur, uidsize_t uid);
-	bool addItemToFolder(Folder folder, cpos_t target, const char* name);
+	bool createBlankFolder(cpos_t parent, cpos_t cur, uidsize_t uid);	//创建空文件夹
+	bool createBlankFile(cpos_t parent, cpos_t cur, uidsize_t uid);		//创建空文件
+	bool addItemToFolder(Folder folder, cpos_t target, const char* name);		//往文件夹里加东西
 	template <typename CheckPmsS>
-	bool delItem(cpos_t cur, CheckPmsS pms);
+	bool delItem(cpos_t cur, CheckPmsS pms);							//删除东西 pms是一个伪函数的模板类,要去能接受pms(SafeInfo*)类型
 
-	bool delNode(CKInfo* info);
+	bool delNode(CKInfo* info);											//删除节点
 
-	bool load(cpos_t pos, size_t hdlid);
-	Folder loadFolder(cpos_t pos, size_t hdlid);
-	IndexNode loadINode(cpos_t pos, size_t hdlid);
-	int checkType(size_t hdlid);
+	bool load(cpos_t pos, size_t hdlid);								//载入一个节点放入编号为hdlid的缓存中
+	Folder loadFolder(cpos_t pos, size_t hdlid);						//载入一个文件夹放入编号为hdlid的缓存中
+	IndexNode loadINode(cpos_t pos, size_t hdlid);						//载入一个i节点放入编号为hdlid的缓存中
+	int checkType(size_t hdlid);										//检测编号为hdlid的缓存里存放的是文件还是文件夹
 
-	cpos_t loadPath(const char* path, size_t len);
+	cpos_t loadPath(const char* path, size_t len);						//通过路径获取文件/文件夹的硬盘位置
 
-	void setErrno(int err);
+	void setErrno(int err);												//设置错误信息(错误信息多个线程间独立)
 
-	void releaseFd(FDSInfo& info);
-	void flushHandler(FDMInfo& info);
-	void flushHandler(FDMInfo& info, time_t modified);
+	void releaseFd(FDSInfo& info);										//释放文件
+	void flushHandler(FDMInfo& info);									//把文件头信息刷入硬盘中
+	void flushHandler(FDMInfo& info, time_t modified);					//把文件头信息刷入硬盘中,同时改变修改时间
 
-	int getFreeMFd();
-	int getFreeSFd();
+	int getFreeMFd();													//获取一个自由的主文件描述符
+	int getFreeSFd();													//获取一个自由的从文件描述符
 	bool fillCKInfo(std::vector<CKInfo>& vec, CKInfo& info);
 
-	bool tryLock(SafeInfo& sfInfo, fdtype_t type);
-	bool isOwner(int fd);
-	bool appendFile(FDMInfo& mInfo, size_t len);
-	void _seek(FDMInfo& mInfo, FDSInfo& info, int offset, FPos pos);
+	bool tryLock(SafeInfo& sfInfo, fdtype_t type);						//尝试锁住文件
+	bool isOwner(int fd);												//判断文件描述符是否属于这个线程
+	bool appendFile(FDMInfo& mInfo, size_t len);						//扩展文件
+	void _seek(FDMInfo& mInfo, FDSInfo& info, int offset, FPos pos);	//移动文件指针
 public:
 	XHYFileManager(DiskDriver* dvr);
 	~XHYFileManager();
@@ -86,34 +86,34 @@ public:
 	bool initFS();
 	
 	template <typename CheckPmsP, typename CheckPmsS>
-	bool deleteItem(const char* path, CheckPmsP pmsp, CheckPmsS pmss);
+	bool deleteItem(const char* path, CheckPmsP pmsp, CheckPmsS pmss);	//删除项目:pmsp父目录权限验证,pmss自身权限验证
 
-	bool createFile(const char* path, const char* name, uidsize_t uid);
-	bool createFolder(const char* path, const char* name, uidsize_t uid);
-	int readFolder(const char* path, size_t start, size_t len, FileNode* result);
-	bool getItemSafeInfo(const char* path, SafeInfo* info);
+	bool createFile(const char* path, const char* name, uidsize_t uid);	//创建文件
+	bool createFolder(const char* path, const char* name, uidsize_t uid);		//创建文件夹
+	int readFolder(const char* path, size_t start, size_t len, FileNode* result);//读取文件夹
+	bool getItemSafeInfo(const char* path, SafeInfo* info);				//获取文件/文件夹详细信息
 
-	int getErrno();
+	int getErrno();								//获取错误码
 
-	void bindThread(std::thread::id thId);
-	void releaseThread(std::thread::id thId);
-
-	template <typename CheckPms>
-	int open(const char* path, fdtype_t type, CheckPms pms);
-
-	bool close(int fd);
-
-	int read(int fd, void* buf, size_t len);
-	int write(int fd, const void* buf, size_t len);
-
-	int tell(int fd);
-	int seek(int fd, int offset, FPos pos);
+	void bindThread(std::thread::id thId);		//绑定线程
+	void releaseThread(std::thread::id thId);	//释放线程
 
 	template <typename CheckPms>
-	bool changeSafeInfo(const char* path, SafeInfo* newInfo, CheckPms pms);
+	int open(const char* path, fdtype_t type, CheckPms pms);	//打开文件:pms权限验证的伪函数模板类pms(SafeInfo*, fdtype_t)
 
-	void lock() { mtx.lock(); }
-	void unlock() { mtx.unlock(); }
+	bool close(int fd);							//关闭文件
+
+	int read(int fd, void* buf, size_t len);	//读
+	int write(int fd, const void* buf, size_t len);	//写
+
+	int tell(int fd);	//获取文件指针
+	int seek(int fd, int offset, FPos pos);	//改变文件指针
+
+	template <typename CheckPms>
+	bool changeSafeInfo(const char* path, SafeInfo* newInfo, CheckPms pms);	//改变安全信息,pms权限
+
+	void lock() { mtx.lock(); }	//手动获得锁(每个调用自身会获得一次锁,这个锁的作用是实现事务操作)
+	void unlock() { mtx.unlock(); }	//手动释放锁
 };
 
 template <typename CheckPmsS>

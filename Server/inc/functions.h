@@ -1,6 +1,6 @@
 #ifndef _FUNCTIONS_H
 #define _FUNCTIONS_H
-
+//交换函数
 template <typename T>
 inline void xswap(T& a, T& b)
 {
@@ -8,7 +8,7 @@ inline void xswap(T& a, T& b)
 	a = b;
 	b = c;
 }
-
+//特殊点的字符串比较函数,比起前len个字符是否相等
 inline bool xstrequ(const char* str1, size_t len, const char* str2)
 {
 	while(len--)

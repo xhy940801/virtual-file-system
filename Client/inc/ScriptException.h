@@ -4,7 +4,7 @@
 #include <string>
 
 #include <stdexcept>
-
+//异常,方便脚本运行的错误信息返回
 class ScriptException
 {
 	std::string key;

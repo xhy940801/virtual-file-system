@@ -9,7 +9,7 @@
 
 #define ERR_UNAME_OVERLENGTH 10
 #define ERR_PSD_OVERLENGTH 11
-
+//会话的客户端,与服务端对接
 class SessionClient
 {
 	int socket;

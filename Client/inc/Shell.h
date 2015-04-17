@@ -15,7 +15,7 @@
 #define ERR_UNKNOW 1
 
 class SandBox;
-
+//壳程序,对Session进行封装,并且与用户交互
 class Shell
 {
 	friend class SandBox;

@@ -6,7 +6,7 @@
 
 #include <string>
 #include <cstdint>
-
+//脚本的变量
 struct Val
 {
 	enum Type {STRING, INT, NONE};

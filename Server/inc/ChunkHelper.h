@@ -5,6 +5,7 @@
 #include <cstring>
 #include <cstddef>
 
+//类似unique_ptr,用来自动管理char数组,使其能自动释放,同时,提供一些方便的函数来获取buf中的信息
 class ChunkHelper
 {
 	char* buffer;
@@ -14,12 +15,18 @@ public:
 
 	char* getBuffer();
 
+	//在buf中提取SafeInfo
 	SafeInfo* getSafeInfo();
+	//在buf中提取INInfo
 	INInfo* getINInfo();
+	//提取长度
 	size_t getCKLen();
+	//提取节点信息
 	CKInfo* getCKInfo();
 
+	//(以扩展块的模式解析)获取扩展i节点的长度
 	size_t getAPCKLen();
+	//(以扩展块的模式解析)获取扩展i节点信息
 	CKInfo* getAPCKInfo();
 
 	FloderInfo* getFloderInfo();
