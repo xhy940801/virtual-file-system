@@ -16,9 +16,9 @@ SandBox::~SandBox()
 
 void SandBox::run(size_t argc, const std::string* argv)
 {
-	init(argc, argv);
 	try
 	{
+		init(argc, argv);
 		stmtBlock(true);
 		if(curToken.type != Token::SEOF)
 			shell->printShellError(curToken.line, "expect end");
@@ -1003,17 +1003,11 @@ Val SandBox::ocp(bool exec)
 		void operator () (FILE* fd) { fclose(fd); }
 	};
 	if(argc < 2)
-	{
-		shell->printError(ERR_ARGS_INVALID);
 		return Val(0);
-	}
 
 	FILE* ofd = fopen(argv[0].c_str(), "r");
 	if(ofd == nullptr)
-	{
-		shell->printError(ERR_OFILE_OPEN_FAIL);
 		return Val(0);
-	}
 	Guard<FILE*, _OFDGuard> ogd(ofd, _OFDGuard());
 	std::string abspth, parent, name;
 	abspth = shell->absPath(argv[1]);
@@ -1023,21 +1017,12 @@ Val SandBox::ocp(bool exec)
 	else
 		name = abspth.substr(parent.size() + 1, abspth.size() - (parent.size() + 1));
 	if(parent == "" || name == "")
-	{
-		shell->printError(ERR_ARGS_INVALID);
 		return Val(0);
-	}
 	if(!session->createFile(parent.c_str(), name.c_str()))
-	{
-		shell->printError(session->getErrno());
 		return Val(0);
-	}
 	int fd = session->openFile(shell->absPath(argv[1]).c_str(), OPTYPE_WRITE);
 	if(fd <= 0)
-	{
-		shell->printError(session->getErrno());
 		return Val(0);
-	}
 	Guard<int, _FDGuard> gd(fd, _FDGuard(session));
 	size_t start = 0;
 	const size_t BUFSIZE = 64;
@@ -1046,10 +1031,7 @@ Val SandBox::ocp(bool exec)
 	{
 		int len = fread(buf.get() + start, sizeof(char), BUFSIZE - start, ofd);
 		if(len < 0)
-		{
-			shell->printError(ERR_OFILE_READ_FAIL);
 			return Val(0);
-		}
 		else if(len == 0)
 			break;
 		else
@@ -1060,15 +1042,9 @@ Val SandBox::ocp(bool exec)
 			{
 				int cl = session->writeFile(fd, buf.get() + has, len - has);
 				if(cl < 0)
-				{
-					shell->printError(session->getErrno());
 					return Val(0);
-				}
 				if(cl == 0)
-				{
-					shell->printError(ERR_UNKNOW);
 					return Val(0);
-				}
 				has += cl;
 			}
 		}
