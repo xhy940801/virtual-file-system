@@ -36,7 +36,7 @@ int main()
 				break;
 			cout << "login fail!\n" << session->getErrno() << endl;
 			releaseSession(session);
-			session = initSession();
+			session = initSession(ipaddr.c_str());
 		}
 		Shell shell(session, uid);
 		string str;
