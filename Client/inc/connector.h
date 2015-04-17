@@ -3,7 +3,7 @@
 
 #include "SessionClient.h"
 
-SessionClient* initSession();
+SessionClient* initSession(const char* ipaddr);
 void releaseSession(SessionClient* session);
 
 #endif

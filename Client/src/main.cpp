@@ -20,7 +20,10 @@ int main()
 	};
 	while(true)
 	{
-		SessionClient* session = initSession();
+		string ipaddr;
+		cout << "please input the server's ip addr" << endl;
+		cin >> ipaddr;
+		SessionClient* session = initSession(ipaddr.c_str());
 		Guard<SessionClient*, _GD> gd(session, _GD());
 		string username, password;
 		int uid;
