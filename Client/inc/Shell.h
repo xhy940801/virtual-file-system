@@ -14,8 +14,11 @@
 #define ERR_FILE_COULD_NOT_EXEC 505
 #define ERR_UNKNOW 1
 
+class SandBox;
+
 class Shell
 {
+	friend class SandBox;
 	SessionClient* session;
 	uidsize_t uid;
 private:
@@ -24,9 +27,10 @@ private:
 	static void printError(int err);							//打印错误代码
 	std::string absPath(std::string path);						//把路径转换为绝对路径
 	std::string evrPath(std::string path);						//把路径转换为环境变量的路径(即在/evr下的目录)
-	static std::string decode(std::string str);					//把参数中的转义字符去掉
 	static std::string parentPath(std::string path);			//获取父路径,如果path格式不正确返回""
 private:
+	void printShellError(size_t line, std::string info);		//打印shell脚本的错误
+
 	void open(size_t argc, const std::string* argv);			//打开文件
 	void seek(size_t argc, const std::string* argv);			//移动文件指针
 	void tell(size_t argc, const std::string* argv);			//获取文件的当前指针
@@ -45,7 +49,7 @@ private:
 	void see(size_t argc, const std::string* argv);				//改变文件权限
 	void ocp(size_t argc, const std::string* argv);				//拷贝文件系统外的文件到文件系统内部
 
-	void runshell(size_t argc, const std::string* argv);		//运行shell程序
+	void runshell(const std::string& exec, size_t argc, const std::string* argv);		//运行shell程序
 public:
 	Shell(SessionClient* _sn, uidsize_t _uid);
 	~Shell();

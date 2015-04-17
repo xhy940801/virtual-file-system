@@ -57,7 +57,7 @@ void Shell::select(const std::string& exec, size_t argc, const std::string* argv
 	else if(exec == "ocp")
 		ocp(argc, argv);
 	else
-		printError(ERR_CMD_NOT_FOUND);
+		runshell(exec, argc, argv);
 }
 
 void Shell::parse(std::string cmd)
@@ -105,6 +105,11 @@ void Shell::parse(std::string cmd)
 ////////////////private function////////////////
 //////////////// exec functions ////////////////
 ////////////////////////////////////////////////
+
+void Shell::printShellError(size_t line, std::string info)
+{
+	std::cout << "shell error, on line: " << line << " info: " << info << std::endl;
+}
 
 void Shell::open(size_t argc, const std::string* argv)
 {
@@ -213,8 +218,7 @@ void Shell::tell(size_t argc, const std::string* argv)
 		printError(session->getErrno());
 		return;
 	}
-	if(fpos)
-		std::cout << "The pos is " << fpos << std::endl;
+	std::cout << "The pos is " << fpos << std::endl;
 }
 
 void Shell::write(size_t argc, const std::string* argv)
@@ -579,7 +583,10 @@ void Shell::see(size_t argc, const std::string* argv)
 	}
 	SafeInfo sfInfo;
 	if(!session->getItemSafeInfo(absPath(argv[0]).c_str(), &sfInfo))
+	{
 		printError(session->getErrno());
+		return;
+	}
 	if(sfInfo.sign & FL_TYPE_FILE)
 		std::cout << "file:\t" << absPath(argv[0]);
 	else
@@ -614,7 +621,10 @@ void Shell::ocp(size_t argc, const std::string* argv)
 
 	FILE* ofd = fopen(argv[0].c_str(), "r");
 	if(ofd == nullptr)
+	{
 		printError(ERR_OFILE_OPEN_FAIL);
+		return;
+	}
 	Guard<FILE*, _OFDGuard> ogd(ofd, _OFDGuard());
 	std::string abspth, parent, name;
 	abspth = absPath(argv[1]);
@@ -629,7 +639,10 @@ void Shell::ocp(size_t argc, const std::string* argv)
 		return;
 	}
 	if(!session->createFile(parent.c_str(), name.c_str()))
+	{
 		printError(session->getErrno());
+		return;
+	}
 	int fd = session->openFile(absPath(argv[1]).c_str(), OPTYPE_WRITE);
 	if(fd <= 0)
 	{
@@ -642,7 +655,7 @@ void Shell::ocp(size_t argc, const std::string* argv)
 	std::unique_ptr<char> buf(new char[BUFSIZE]);
 	while(true)
 	{
-		int len = fread(buf.get() + start, sizeof(char), BUFSIZE - start, ofd);
+		int len = fread(buf.get(), sizeof(char), BUFSIZE, ofd);
 		if(len < 0)
 		{
 			printError(ERR_OFILE_READ_FAIL);
@@ -673,7 +686,7 @@ void Shell::ocp(size_t argc, const std::string* argv)
 	}
 }
 
-void Shell::runshell(size_t argc, const std::string* argv)
+void Shell::runshell(const std::string& exec, size_t argc, const std::string* argv)
 {
 	class _FDGuard
 	{
@@ -685,8 +698,12 @@ void Shell::runshell(size_t argc, const std::string* argv)
 
 	//检查是否有可读权限
 	SafeInfo sfInfo;
-	if(!session->getItemSafeInfo(evrPath(argv[0]).c_str(), &sfInfo))
+	std::string shellPath = evrPath(exec);
+	if(!session->getItemSafeInfo(shellPath.c_str(), &sfInfo))
+	{
 		printError(session->getErrno());
+		return;
+	}
 	if((sfInfo.uid == uid && !(sfInfo.sign & PM_U_EXECUTE)) || (sfInfo.uid != uid && !(sfInfo.sign & PM_O_EXECUTE)))
 	{
 		printError(ERR_FILE_COULD_NOT_EXEC);
@@ -695,15 +712,10 @@ void Shell::runshell(size_t argc, const std::string* argv)
 
 	std::string sh;
 
-	if(argc < 1)
-	{
-		printError(ERR_ARGS_INVALID);
-		return;
-	}
 	const size_t BUFSIZE = 64;
 	std::unique_ptr<char> buf(new char[BUFSIZE + 1]);
 	//打开文件
-	int fd = session->openFile(evrPath(argv[0]).c_str(), OPTYPE_READ);
+	int fd = session->openFile(shellPath.c_str(), OPTYPE_READ);
 	if(fd <= 0)
 	{
 		printError(session->getErrno());
@@ -731,8 +743,8 @@ void Shell::runshell(size_t argc, const std::string* argv)
 	}
 
 	//开启个新的沙盒运行之
-	SandBox sd(this);
-	sd.run(sh, argc - 1, argv + 1);
+	SandBox sd(this, sh);
+	sd.run(argc, argv);
 }
 
 void Shell::printError(int err)
@@ -769,8 +781,8 @@ std::string Shell::absPath(std::string path)
 		if(path[end] == '/')
 		{
 			if(start == end)
-				tpath = "/";
-			if(end - start == 2 && path[start] == '.' && path[start + 1] == '.')
+				tpath = "";
+			else if(end - start == 2 && path[start] == '.' && path[start + 1] == '.')
 				tpath = parentPath(tpath);
 			else if(end - start == 1 && path[start] == '.');
 			else
@@ -792,65 +804,6 @@ std::string Shell::absPath(std::string path)
 std::string Shell::evrPath(std::string path)
 {
 	return absPath("/evr/" + path);
-}
-
-std::string Shell::decode(std::string str)
-{
-	if(str.size() == 0)
-		return str;
-	std::string rs;
-	for(size_t i = 0; i + 1 < str.size(); ++i)
-	{
-		if(str[i] == '\\')
-		{
-			std::string tmp;
-			switch(str[i + 1])
-			{
-			case 'a':
-				tmp = "\a";
-				break;
-			case 'b':
-				tmp = "\b";
-				break;
-			case 'f':
-				tmp = "\f";
-				break;
-			case 'n':
-				tmp = "\n";
-				break;
-			case 'r':
-				tmp = "\r";
-				break;
-			case 't':
-				tmp = "\t";
-				break;
-			case 'v':
-				tmp = "\v";
-				break;
-			case '\\':
-				tmp = "\\";
-				break;
-			case '\'':
-				tmp = "\'";
-				break;
-			case '\"':
-				tmp = "\"";
-				break;
-			case '\0':
-				tmp = "\0";
-				break;
-			default:
-				tmp = "\\" + str[i + 1];
-				break;
-			}
-			++i;
-			rs += tmp;
-		}
-		else
-			rs += str[i];
-	}
-	rs += str[str.size() - 1];
-	return rs;
 }
 
 std::string Shell::parentPath(std::string path)
