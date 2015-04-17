@@ -5,7 +5,6 @@
 #include "sdef.h"
 #include "types.h"
 #include "FMGuard.h"
-#include "GlobalVal.h"
 
 #include <iostream>
 #include <stdio.h>

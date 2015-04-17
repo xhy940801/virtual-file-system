@@ -16,7 +16,7 @@ LIBKINKERS=$(patsubst lib%.so,-l%,$(LIBS))
 
 BASEFLAGS= -Wall -I $(INCDIR) -std=c++0x -pthread 
 POSTFIXFLAGS= -L $(LIBDIR) -lstdc++ $(LIBKINKERS)
-CFLAGS=$(BASEFLAGS) -O2 -fno-strict-aliasing 
+CFLAGS=$(BASEFLAGS) -O0 -fno-strict-aliasing 
 
 vpath %.h 			$(INCDIR)
 vpath %.$(POSTFIX)	$(SRCDIR)
